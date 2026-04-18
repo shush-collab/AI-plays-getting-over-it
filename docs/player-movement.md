@@ -11,11 +11,13 @@
 
 - The validated coordinate is the live `Rigidbody2D.position` of `PlayerControl.fakeCursorRB`.
 - This is currently the best confirmed movement signal for the player.
+- The fast observation lane in `src/aiget/live_position.py` is built directly on this signal.
 
 ## Memory Path
 
 - The runtime resolver finds `PlayerControl`, then `fakeCursorRB`, then the native Unity object behind `fakeCursorRB`.
 - After calibration, the direct raw-memory read used by the tracker is `fakeCursorRB_native + 0xA8`.
+- That frozen path is reused by both the standalone live-position stream and the richer observation-state stream.
 
 ## Why This Is Trusted
 

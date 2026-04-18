@@ -38,6 +38,33 @@ class CalibrationResult:
     candidate_hits: int
 
 
+@dataclass(frozen=True)
+class FastCursorLane:
+    pid: int
+    fake_cursor_native: int
+    fake_cursor_rb_native: int
+    candidate: CandidatePath
+    current_addr: int
+    calibration_samples: int
+    calibration_hits: int
+    motion_span: float
+
+    def roots(self) -> dict[str, int]:
+        return {
+            "rb_native": self.fake_cursor_rb_native,
+            "tf_native": self.fake_cursor_native,
+        }
+
+
+@dataclass(frozen=True)
+class FastCursorSample:
+    ts: float
+    pid: int
+    addr: int
+    x: float
+    y: float
+
+
 KNOWN_CURSOR_PATHS = (
     CandidatePath(root_name="rb_native", ptr_offset=None, value_offset=0xA8),
 )
@@ -231,17 +258,68 @@ def calibrate(pid: int, calibration_samples: int, calibration_interval: float, w
     )
 
 
-def emit_sample(output_format: str, pid: int, addr: int, x: float, y: float) -> None:
-    ts = time.time()
+def freeze_fast_cursor_lane(
+    pid: int,
+    calibration_samples: int,
+    calibration_interval: float,
+    window: int,
+    eps: float,
+) -> FastCursorLane:
+    result = calibrate(
+        pid=pid,
+        calibration_samples=calibration_samples,
+        calibration_interval=calibration_interval,
+        window=window,
+        eps=eps,
+    )
+    return FastCursorLane(
+        pid=result.pid,
+        fake_cursor_native=result.fake_cursor_native,
+        fake_cursor_rb_native=result.fake_cursor_rb_native,
+        candidate=result.candidate,
+        current_addr=result.current_addr,
+        calibration_samples=result.truth_samples,
+        calibration_hits=result.candidate_hits,
+        motion_span=result.motion_span,
+    )
+
+
+def read_fast_cursor_sample(reader: MemReader, lane: FastCursorLane, ts: float | None = None) -> FastCursorSample:
+    addr = resolve_candidate_addr(reader, lane.roots(), lane.candidate)
+    x, y = reader.read_vec2(addr)
+    return FastCursorSample(
+        ts=time.time() if ts is None else ts,
+        pid=lane.pid,
+        addr=addr,
+        x=x,
+        y=y,
+    )
+
+
+def emit_sample(output_format: str, sample: FastCursorSample) -> None:
     if output_format == "json":
-        print(json.dumps({"ts": ts, "pid": pid, "addr": hex(addr), "x": x, "y": y}), flush=True)
+        print(
+            json.dumps(
+                {
+                    "ts": sample.ts,
+                    "pid": sample.pid,
+                    "addr": hex(sample.addr),
+                    "x": sample.x,
+                    "y": sample.y,
+                }
+            ),
+            flush=True,
+        )
     else:
-        print(f"{ts:.6f} pid={pid} addr={fmt_addr(addr)} x={x:.6f} y={y:.6f}", flush=True)
+        print(
+            f"{sample.ts:.6f} pid={sample.pid} addr={fmt_addr(sample.addr)} x={sample.x:.6f} y={sample.y:.6f}",
+            flush=True,
+        )
 
 
 def stream_for_pid(pid: int, args: argparse.Namespace) -> None:
     log(f"Resolving PlayerControl and calibrating raw-memory position path for PID {pid}.")
-    result = calibrate(
+    lane = freeze_fast_cursor_lane(
         pid=pid,
         calibration_samples=args.calibration_samples,
         calibration_interval=args.calibration_interval,
@@ -249,25 +327,20 @@ def stream_for_pid(pid: int, args: argparse.Namespace) -> None:
         eps=args.eps,
     )
     log(
-        f"Selected path {result.candidate.describe()} -> {fmt_addr(result.current_addr)} "
-        f"(hits={result.candidate_hits}/{result.truth_samples}, motion_span={result.motion_span:.6f})"
+        f"Frozen fast cursor lane {lane.candidate.describe()} -> {fmt_addr(lane.current_addr)} "
+        f"(hits={lane.calibration_hits}/{lane.calibration_samples}, motion_span={lane.motion_span:.6f})"
     )
-    if result.motion_span < 0.05:
+    if lane.motion_span < 0.05:
         log("Calibration saw very little movement; the chosen path is valid for current samples but should be treated as lower confidence.")
 
     reader = MemReader(pid)
     try:
         previous = None
         while True:
-            addr = resolve_candidate_addr(
-                reader,
-                {"rb_native": result.fake_cursor_rb_native, "tf_native": result.fake_cursor_native},
-                result.candidate,
-            )
-            x, y = reader.read_vec2(addr)
-            rounded = (round(x, 6), round(y, 6))
+            sample = read_fast_cursor_sample(reader, lane)
+            rounded = (round(sample.x, 6), round(sample.y, 6))
             if not args.only_changes or rounded != previous:
-                emit_sample(args.format, pid, addr, x, y)
+                emit_sample(args.format, sample)
                 previous = rounded
             time.sleep(args.interval)
     finally:

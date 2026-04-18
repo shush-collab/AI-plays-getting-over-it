@@ -16,10 +16,10 @@ AIget/
 ├── goi_live_position.py
 ├── goi_memory_probe.py
 ├── goi_observation_schema.py
+├── goi_observation_state.py
 ├── goi_ptrace_il2cpp.py
 ├── pyproject.toml
 ├── README.md
-├── agents.md
 └── contributions.md
 ```
 
@@ -29,6 +29,7 @@ AIget/
 - Root-level `goi_*.py` files are thin compatibility launchers.
 - `docs/` contains design notes, reverse-engineering details, and runtime assumptions.
 - `tests/` contains automated checks that should not require a live game process.
+- `docs/observation-roadmap.md` tracks the current observation-architecture work.
 
 ## Working Agreement
 
@@ -63,6 +64,7 @@ observation features:
 - Do not present unverified assumptions as facts.
 - Document the validation method used.
 - Update the relevant file in `docs/` if assumptions or validated paths changed.
+- Keep the fast cursor lane and the slow rich-state lane conceptually separate unless your change is intentionally unifying them.
 
 Good contribution notes include:
 
@@ -110,6 +112,7 @@ Every user-facing CLI module should:
 - Keep human-readable and machine-readable output modes explicit.
 - Flush output consistently for long-running streams.
 - Continue to work with `--help`.
+- Make playability-impacting polling or refresh rates explicit in CLI flags rather than hidden constants.
 
 ## Tests
 
@@ -140,6 +143,7 @@ Update documentation when needed:
 
 - Update `README.md` if setup, usage, or project structure changed.
 - Update `docs/` when behavior depends on reverse-engineering details or runtime offsets.
+- Remove stale instructions or references when the architecture changes instead of leaving both old and new guidance in place.
 - Keep documentation concrete and close to the code or behavior it explains.
 
 ## Pull Request Checklist

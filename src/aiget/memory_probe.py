@@ -121,14 +121,57 @@ class PlayerControlCandidate:
     num_wins: int
 
 
+def normalize_exe_target(target: str) -> str:
+    suffix = " (deleted)"
+    if target.endswith(suffix):
+        return target[: -len(suffix)]
+    return target
+
+
+def candidate_pids_from_pgrep_output(output: str, binary_path: Path = GAME_BINARY) -> list[int]:
+    candidates: list[int] = []
+    binary_text = str(binary_path)
+    binary_name = binary_path.name
+
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue
+        command = parts[1]
+        argv0 = command.split(maxsplit=1)[0]
+        if command.startswith(binary_text) or argv0 == binary_text or argv0.endswith(f"/{binary_name}"):
+            candidates.append(int(parts[0]))
+
+    return candidates
+
+
 def auto_pid() -> int:
-    proc = subprocess.run(
-        ["pgrep", "-f", str(GAME_BINARY)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    pids = [int(line) for line in proc.stdout.splitlines() if line.strip()]
+    pids: list[int] = []
+
+    proc_root = Path("/proc")
+    if proc_root.exists():
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                exe_target = normalize_exe_target(os.readlink(entry / "exe"))
+            except OSError:
+                continue
+            if exe_target == str(GAME_BINARY):
+                pids.append(int(entry.name))
+
+    if not pids:
+        proc = subprocess.run(
+            ["pgrep", "-af", GAME_BINARY.name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        pids = candidate_pids_from_pgrep_output(proc.stdout)
+
     if not pids:
         raise RuntimeError("GettingOverIt.x86_64 is not running")
     return pids[-1]

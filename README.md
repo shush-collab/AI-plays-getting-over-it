@@ -2,12 +2,19 @@
 
 This project is building a reinforcement learning agent for *Getting Over It with Bennett Foddy* on native Linux.
 
+The installed game is a native Linux Unity build with:
+
+- `GettingOverIt.x86_64`
+- `UnityPlayer.so`
+- `GameAssembly.so`
+
 ## Repository Layout
 
 ```text
 AIget/
 ├── docs/
 │   ├── observation-schema.md
+│   ├── observation-roadmap.md
 │   └── player-movement.md
 ├── src/
 │   └── aiget/
@@ -15,6 +22,7 @@ AIget/
 │       ├── live_position.py
 │       ├── memory_probe.py
 │       ├── observation_schema.py
+│       ├── observation_state.py
 │       └── ptrace_il2cpp.py
 ├── tests/
 │   └── README.md
@@ -34,18 +42,29 @@ Development and contribution guidance lives in `contributions.md`.
 
 ## Current Stage
 
-The immediate blocker was solved: we can now read the live in-game `x,y` position of the player controller in real time from process memory.
+The current focus is live observation architecture for RL.
 
 What is working now:
 - `src/aiget/ptrace_il2cpp.py` resolves the live `PlayerControl` object, its `fakeCursorRB` field, and queries Unity for the true `Rigidbody2D.position`.
-- `src/aiget/live_position.py` uses that ground truth once at startup, calibrates the matching raw-memory path, then streams `x,y` from `/proc/<pid>/mem`.
+- `src/aiget/live_position.py` freezes the validated raw-memory cursor path into an explicit fast observation lane and streams `x,y` from `/proc/<pid>/mem`.
 - `src/aiget/memory_probe.py` is a helper for memory inspection and direct vector watching.
 - `src/aiget/observation_schema.py` defines the planned RL observation vector layout.
-- `src/aiget/observation_state.py` streams the currently implemented observation features: cursor position, cursor velocity, and progress features.
+- `src/aiget/observation_state.py` uses two explicit lanes:
+  - a fast cursor lane from raw memory
+  - a slower rich-state lane for body, hammer, contacts, and progress
+- The rich lane is packaged into one `RichStateSnapshot` object and updated in the background.
 - When discovery misses a moving calibration sample, the live stream falls back to the currently validated cursor path `fakeCursorRB_native + 0xA8`.
+- The fast loop now reuses the latest rich snapshot without blocking on fresh slow-lane updates.
+- The current observation architecture roadmap lives in `docs/observation-roadmap.md`.
 
 The current validated raw-memory path is:
 - `fakeCursorRB_native + 0xA8`
+
+What is still not solved:
+
+- The rich observation lane still depends on external ptrace/Unity calls.
+- Higher slow-lane refresh rates can still hurt playability.
+- The final RL-facing observation builder API does not exist yet.
 
 ## Quick Start
 
@@ -115,19 +134,19 @@ pip install -e ".[dev]"
 
 ## Usage
 
-Live JSON stream for RL:
+Fast cursor lane only:
 
 ```bash
 python goi_live_position.py --format json
 ```
 
-Only emit on change:
+Fast cursor lane, emit only on change:
 
 ```bash
 python goi_live_position.py --format json --only-changes
 ```
 
-Follow restarts and recalibrate automatically:
+Fast cursor lane, follow restarts and recalibrate automatically:
 
 ```bash
 python goi_live_position.py --format json --follow-restarts
@@ -151,13 +170,25 @@ Observation schema:
 python goi_observation_schema.py --format markdown
 ```
 
-Implemented observation-state stream:
+One-shot rich observation payload:
 
 ```bash
 python goi_observation_state.py --format json
 ```
 
-Installed console scripts are also available after `uv sync` or `pip install -e .`:
+Continuous split-lane observation stream:
+
+```bash
+python goi_observation_state.py --format text --samples 0 --interval 0.05 --unity-snapshot-interval 0.2
+```
+
+Echo a previous action into the payload:
+
+```bash
+python goi_observation_state.py --format json --previous-action 0.0 0.0
+```
+
+Installed console scripts are available after `pip install -e .`:
 
 ```bash
 aiget-live-position --format json
@@ -178,12 +209,12 @@ python3 -m compileall src *.py
 
 ## Todo
 
-- [x] Resolve the live `PlayerControl` object and confirm the correct movement source.
-- [x] Resolve `fakeCursorRB` and verify the live `Rigidbody2D.position`.
-- [x] Calibrate a direct raw-memory read path and stream `x,y` from `/proc/<pid>/mem`.
-- [x] Define the RL observation schema. The current `v1` schema is documented in `src/aiget/observation_schema.py` and covers body state, hammer state, cursor state, contact state, progress, previous action, and synthetic LIDAR distances.
-- [ ] Add the extra state readers required by that observation schema.
+Observation architecture progress is tracked in `docs/observation-roadmap.md`.
+
+Remaining project backlog:
+
+- [ ] Finish the remaining observation-state readers, especially body-contact state and the synthetic LIDAR features.
 - [ ] Implement synthetic LIDAR / raycasting against the game world.
 - [ ] Wire control inputs into the game process for training.
-- [ ] Build the observation + action loop for rollout collection.
+- [ ] Build the unified observation + action loop for rollout collection.
 - [ ] Start data collection and training.

@@ -10,8 +10,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .memory_probe import auto_pid
 
-GAME_BINARY = Path("/home/fln/.steam/debian-installation/steamapps/common/Getting Over It/GettingOverIt.x86_64")
+
 GAME_ASSEMBLY = Path("/home/fln/.steam/debian-installation/steamapps/common/Getting Over It/GameAssembly.so")
 ICALL_RIGIDBODY2D_GET_POSITION = "UnityEngine.Rigidbody2D::get_position_Injected(UnityEngine.Vector2&)"
 ICALL_TRANSFORM_GET_POSITION = "UnityEngine.Transform::get_position_Injected(UnityEngine.Vector3&)"
@@ -23,6 +24,14 @@ PTRACE_GETREGS = 12
 PTRACE_SETREGS = 13
 PTRACE_PEEKDATA = 2
 PTRACE_POKEDATA = 5
+PTRACE_GETREGSET = 0x4204
+PTRACE_SETREGSET = 0x4205
+
+NT_PRFPREG = 2
+NT_X86_XSTATE = 0x202
+
+REGSET_BUFFER_SIZE = 4096
+TRAP_SEARCH_RADIUS = 0x100
 
 
 class user_regs_struct(ctypes.Structure):
@@ -57,6 +66,13 @@ class user_regs_struct(ctypes.Structure):
     ]
 
 
+class iovec(ctypes.Structure):
+    _fields_ = [
+        ("iov_base", ctypes.c_void_p),
+        ("iov_len", ctypes.c_size_t),
+    ]
+
+
 @dataclass(frozen=True)
 class MapRegion:
     start: int
@@ -84,19 +100,6 @@ def ptrace(request: int, pid: int, addr: int = 0, data: int = 0) -> int:
         err = ctypes.get_errno()
         raise OSError(err, os.strerror(err))
     return result
-
-
-def auto_pid() -> int:
-    proc = subprocess.run(
-        ["pgrep", "-f", str(GAME_BINARY)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    pids = [int(line) for line in proc.stdout.splitlines() if line.strip()]
-    if not pids:
-        raise RuntimeError("GettingOverIt.x86_64 is not running")
-    return pids[-1]
 
 
 def load_maps(pid: int) -> list[MapRegion]:
@@ -171,6 +174,25 @@ def load_export_offsets() -> dict[str, int]:
     return offsets
 
 
+def choose_int3_trap_offset(data: bytes, pivot: int) -> int | None:
+    if not data:
+        return None
+
+    pivot = max(0, min(pivot, len(data) - 1))
+    best_idx = None
+    best_key = None
+
+    for idx, value in enumerate(data):
+        if value != 0xCC:
+            continue
+        key = (abs(idx - pivot), 0 if idx <= pivot else 1, idx)
+        if best_key is None or key < best_key:
+            best_key = key
+            best_idx = idx
+
+    return best_idx
+
+
 class RemoteProcess:
     def __init__(self, pid: int):
         self.pid = pid
@@ -182,6 +204,8 @@ class RemoteProcess:
         self.mem_fd = os.open(f"/proc/{pid}/mem", os.O_RDONLY)
         self._attached = False
         self._base_regs: user_regs_struct | None = None
+        self._base_regset_note: int | None = None
+        self._base_regset = b""
         self._scratch_base = 0
         self._scratch_size = 0x4000
         self._scratch_top = 0
@@ -225,6 +249,61 @@ class RemoteProcess:
     def set_regs(self, regs: user_regs_struct) -> None:
         ptrace(PTRACE_SETREGS, self.leader, 0, ctypes.addressof(regs))
 
+    def _get_regset(self, note_type: int, size: int = REGSET_BUFFER_SIZE) -> bytes:
+        buffer = ctypes.create_string_buffer(size)
+        iov = iovec(iov_base=ctypes.cast(buffer, ctypes.c_void_p), iov_len=size)
+        ptrace(PTRACE_GETREGSET, self.leader, note_type, ctypes.addressof(iov))
+        actual_size = int(iov.iov_len)
+        if actual_size <= 0:
+            raise RemoteError(f"PTRACE_GETREGSET returned empty state for note type 0x{note_type:X}")
+        return buffer.raw[:actual_size]
+
+    def _set_regset(self, note_type: int, data: bytes) -> None:
+        buffer = ctypes.create_string_buffer(data)
+        iov = iovec(iov_base=ctypes.cast(buffer, ctypes.c_void_p), iov_len=len(data))
+        ptrace(PTRACE_SETREGSET, self.leader, note_type, ctypes.addressof(iov))
+
+    def _capture_extended_state(self) -> tuple[int, bytes]:
+        errors: list[str] = []
+        for note_type in (NT_X86_XSTATE, NT_PRFPREG):
+            try:
+                return note_type, self._get_regset(note_type)
+            except OSError as exc:
+                errors.append(f"0x{note_type:X}: {exc}")
+        raise RemoteError(
+            "Unable to capture floating-point/SIMD register state before remote call: " + "; ".join(errors)
+        )
+
+    def _restore_extended_state(self) -> None:
+        if self._base_regset_note is None or not self._base_regset:
+            return
+        self._set_regset(self._base_regset_note, self._base_regset)
+
+    def _resolve_trap_addr(self) -> int:
+        # Resolve the current Transform.get_position icall target and search nearby executable bytes
+        # for an existing int3 instruction we can safely use as a synthetic return breakpoint.
+        game_base = gameassembly_base(self.maps)
+        transform_slot = game_base + 0x221EE00
+        transform_target = self.read_ptr(transform_slot)
+        if not transform_target:
+            raise RemoteError("Transform.get_position icall slot resolved to null")
+
+        region = region_for(self.maps, transform_target)
+        if not region or "x" not in region.perms:
+            raise RemoteError(
+                f"Transform.get_position target 0x{transform_target:X} is not in an executable mapping"
+            )
+
+        window_start = max(region.start, transform_target - TRAP_SEARCH_RADIUS)
+        window_end = min(region.end, transform_target + TRAP_SEARCH_RADIUS)
+        code = self.read(window_start, window_end - window_start)
+        trap_offset = choose_int3_trap_offset(code, transform_target - window_start)
+        if trap_offset is None:
+            raise RemoteError(
+                "No nearby int3 breakpoint was found around Transform.get_position; refusing remote execution"
+            )
+        return window_start + trap_offset
+
     def attach_all(self) -> None:
         if self._attached:
             return
@@ -234,12 +313,8 @@ class RemoteProcess:
             os.waitpid(tid, 0)
         self._attached = True
         self._base_regs = self.get_regs()
-
-        # Use a known int3 padding slot immediately before Transform.get_position_Injected.
-        game_base = gameassembly_base(self.maps)
-        transform_slot = game_base + 0x221EE00
-        transform_target = self.read_ptr(transform_slot)
-        self._trap_addr = transform_target - 0xC
+        self._base_regset_note, self._base_regset = self._capture_extended_state()
+        self._trap_addr = self._resolve_trap_addr()
 
         base_regs = self._base_regs
         self._scratch_top = (base_regs.rsp - 0x2000) & ~0xF
@@ -252,6 +327,7 @@ class RemoteProcess:
         if self._base_regs is not None:
             self.write(self._scratch_base, self._scratch_orig)
             self.set_regs(self._base_regs)
+            self._restore_extended_state()
         for tid in reversed(self.threads):
             ptrace(PTRACE_DETACH, tid, 0, 0)
         self._attached = False
@@ -260,6 +336,7 @@ class RemoteProcess:
         assert self._base_regs is not None
         self.write(self._scratch_base, self._scratch_orig)
         self.set_regs(self._base_regs)
+        self._restore_extended_state()
         self._cursor = self._scratch_base
 
     def alloc(self, data: bytes, align: int = 8) -> int:
