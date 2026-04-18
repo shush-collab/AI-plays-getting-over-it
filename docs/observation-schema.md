@@ -29,6 +29,17 @@ Current groups in order:
 - body LIDAR distances
 - hammer LIDAR distances
 
+Currently implemented live readers:
+- `cursor_position_xy`
+- `cursor_velocity_xy` derived from successive cursor samples
+- `progress_features` as current height, best height, and time since last upward progress
+
+Stream the implemented subset:
+
+```bash
+python goi_observation_state.py --format json
+```
+
 Print the full schema with offsets and sizes:
 
 ```bash

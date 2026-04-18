@@ -23,3 +23,5 @@ env/
 .idea/
 .vscode/
 .DS_Store
+agents.md
+AGENTS.md

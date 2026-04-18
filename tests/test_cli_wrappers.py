@@ -31,6 +31,7 @@ class CliWrapperTests(unittest.TestCase):
         for script_name in (
             "goi_live_position.py",
             "goi_memory_probe.py",
+            "goi_observation_state.py",
             "goi_ptrace_il2cpp.py",
         ):
             with self.subTest(script_name=script_name):

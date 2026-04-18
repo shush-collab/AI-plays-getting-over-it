@@ -20,6 +20,7 @@ dev = [
 aiget-live-position = "aiget.live_position:main"
 aiget-memory-probe = "aiget.memory_probe:main"
 aiget-observation-schema = "aiget.observation_schema:main"
+aiget-observation-state = "aiget.observation_state:main"
 aiget-ptrace-il2cpp = "aiget.ptrace_il2cpp:main"
 
 [tool.setuptools]

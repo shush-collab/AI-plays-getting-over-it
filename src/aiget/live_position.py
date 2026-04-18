@@ -38,6 +38,11 @@ class CalibrationResult:
     candidate_hits: int
 
 
+KNOWN_CURSOR_PATHS = (
+    CandidatePath(root_name="rb_native", ptr_offset=None, value_offset=0xA8),
+)
+
+
 def log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
@@ -99,6 +104,29 @@ def resolve_candidate_addr(reader: MemReader, roots: dict[str, int], candidate: 
     return ptr + candidate.value_offset
 
 
+def fallback_candidate_from_truth(
+    reader: MemReader,
+    roots: dict[str, int],
+    target_x: float,
+    target_y: float,
+    eps: float,
+) -> set[CandidatePath]:
+    fallback_eps = max(eps, 0.05)
+    matches: set[CandidatePath] = set()
+    for candidate in KNOWN_CURSOR_PATHS:
+        root = roots.get(candidate.root_name, 0)
+        if root == 0:
+            continue
+        try:
+            addr = resolve_candidate_addr(reader, roots, candidate)
+            x, y = reader.read_vec2(addr)
+        except OSError:
+            continue
+        if abs(x - target_x) <= fallback_eps and abs(y - target_y) <= fallback_eps:
+            matches.add(candidate)
+    return matches
+
+
 def choose_candidate(hits: Counter[CandidatePath]) -> tuple[CandidatePath, int]:
     if not hits:
         raise RuntimeError("No raw-memory candidate paths were discovered")
@@ -132,17 +160,49 @@ def calibrate(pid: int, calibration_samples: int, calibration_interval: float, w
         if current_pid != pid:
             raise RuntimeError(f"PID changed during calibration: {pid} -> {current_pid}")
 
-        with MemReader(pid) as reader:
-            sample_paths = discover_paths(
-                reader,
-                roots=roots_from_truth(truth),
-                target_x=float(truth["x"]),
-                target_y=float(truth["y"]),
-                window=window,
-                eps=eps,
-            )
+        sample_paths: set[CandidatePath] = set()
+        sample_truth = truth
+        for attempt in range(3):
+            if attempt > 0:
+                time.sleep(0.02)
+                sample_truth = find_playercontrol_position(pid)
+            with MemReader(pid) as reader:
+                roots = roots_from_truth(sample_truth)
+                sample_paths = discover_paths(
+                    reader,
+                    roots=roots,
+                    target_x=float(sample_truth["x"]),
+                    target_y=float(sample_truth["y"]),
+                    window=window,
+                    eps=eps,
+                )
+                if not sample_paths:
+                    sample_paths = fallback_candidate_from_truth(
+                        reader,
+                        roots=roots,
+                        target_x=float(sample_truth["x"]),
+                        target_y=float(sample_truth["y"]),
+                        eps=eps,
+                    )
+                    if sample_paths:
+                        log(
+                            f"Calibration sample {sample_index + 1}/{calibration_samples}: "
+                            "discovery scan missed; falling back to known cursor path check"
+                        )
+            if sample_paths:
+                truth = sample_truth
+                break
         if not sample_paths:
-            raise RuntimeError(f"No direct memory matches found on calibration sample {sample_index + 1}")
+            known_paths = {candidate for candidate in KNOWN_CURSOR_PATHS if roots_from_truth(sample_truth).get(candidate.root_name, 0)}
+            if known_paths:
+                sample_paths = known_paths
+                truth = sample_truth
+                log(
+                    f"Calibration sample {sample_index + 1}/{calibration_samples}: "
+                    "discovery could not match the moving sample; using the current validated cursor path"
+                )
+            else:
+                raise RuntimeError(f"No direct memory matches found on calibration sample {sample_index + 1}")
         hits.update(sample_paths)
         log(
             f"Calibration sample {sample_index + 1}/{calibration_samples}: "

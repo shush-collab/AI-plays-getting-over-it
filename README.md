@@ -21,6 +21,7 @@ AIget/
 ├── goi_live_position.py
 ├── goi_memory_probe.py
 ├── goi_observation_schema.py
+├── goi_observation_state.py
 ├── goi_ptrace_il2cpp.py
 ├── .gitignore
 ├── pyproject.toml
@@ -40,6 +41,8 @@ What is working now:
 - `src/aiget/live_position.py` uses that ground truth once at startup, calibrates the matching raw-memory path, then streams `x,y` from `/proc/<pid>/mem`.
 - `src/aiget/memory_probe.py` is a helper for memory inspection and direct vector watching.
 - `src/aiget/observation_schema.py` defines the planned RL observation vector layout.
+- `src/aiget/observation_state.py` streams the currently implemented observation features: cursor position, cursor velocity, and progress features.
+- When discovery misses a moving calibration sample, the live stream falls back to the currently validated cursor path `fakeCursorRB_native + 0xA8`.
 
 The current validated raw-memory path is:
 - `fakeCursorRB_native + 0xA8`
@@ -148,12 +151,19 @@ Observation schema:
 python goi_observation_schema.py --format markdown
 ```
 
+Implemented observation-state stream:
+
+```bash
+python goi_observation_state.py --format json
+```
+
 Installed console scripts are also available after `uv sync` or `pip install -e .`:
 
 ```bash
 aiget-live-position --format json
 aiget-memory-probe icalls
 aiget-observation-schema --format markdown
+aiget-observation-state --format json
 aiget-ptrace-il2cpp
 ```
 
