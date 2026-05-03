@@ -69,8 +69,8 @@ class LivePositionTests(unittest.TestCase):
         self.assertEqual(sample.addr, 0x10A8)
         self.assertEqual((sample.x, sample.y), (13.2, 63.35))
 
-    def test_read_fast_cursor_sample_supports_indirection(self) -> None:
-        reader = _FakeReader({0x30A8: (7.5, 8.5)}, ptrs={0x2010: 0x3000})
+    def test_read_fast_cursor_sample_uses_frozen_address_even_for_indirect_candidate(self) -> None:
+        reader = _FakeReader({0x30A8: (7.5, 8.5)})
         lane = FastCursorLane(
             pid=4321,
             fake_cursor_native=0x2000,

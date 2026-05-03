@@ -27,11 +27,8 @@ MANAGED_ARRAY_LENGTH_OFFSET = 0x18
 MANAGED_ARRAY_DATA_OFFSET = 0x20
 RICH_VALIDITY_FIELDS = (
     "body_position_xy",
-    "body_angle",
     "hammer_anchor_xy",
     "hammer_tip_xy",
-    "hammer_contact_flags",
-    "hammer_contact_normal_xy",
     "progress_features",
 )
 
@@ -194,41 +191,31 @@ def read_rich_raw_sample(reader: MemReader, lane: RawRichLane, ts: float | None 
     sample_ts = time.time() if ts is None else ts
     valid_mask = _completed_valid_mask(lane.layout.valid_mask)
 
-    body_position_xy = _read_optional_layout_vec2(
+    progress_addr = lane.layout.progress_addr or lane.layout.body_position_addr
+    fields = _read_grouped_memory(
         reader,
-        lane.layout.body_position_addr,
-        valid_mask,
-        "body_position_xy",
+        {
+            "body_position_xy": (lane.layout.body_position_addr, 8),
+            "hammer_anchor_xy": (lane.layout.hammer_anchor_addr, 8),
+            "hammer_tip_xy": (lane.layout.hammer_tip_addr, 8),
+            "progress_xy": (progress_addr, 8),
+        },
     )
-    body_angle = _read_optional_layout_f32(
-        reader,
-        lane.layout.body_angle_addr,
-        valid_mask,
-        "body_angle",
-    )
-    hammer_anchor_xy = _read_optional_layout_vec2(
-        reader,
-        lane.layout.hammer_anchor_addr,
-        valid_mask,
-        "hammer_anchor_xy",
-    )
-    hammer_tip_xy = _read_optional_layout_vec2(
-        reader,
-        lane.layout.hammer_tip_addr,
-        valid_mask,
-        "hammer_tip_xy",
-    )
-    hammer_contact_flags, hammer_contact_normal_xy = _read_optional_hammer_contact_state(reader, lane.layout, valid_mask)
-    progress_features = _read_optional_progress_features(reader, lane.layout, valid_mask)
+
+    body_position_xy = _unpack_vec2_field(fields, valid_mask, "body_position_xy")
+    hammer_anchor_xy = _unpack_vec2_field(fields, valid_mask, "hammer_anchor_xy")
+    hammer_tip_xy = _unpack_vec2_field(fields, valid_mask, "hammer_tip_xy")
+    progress_xy = _unpack_vec2_field(fields, valid_mask, "progress_features", source_name="progress_xy")
+    progress_features = None if progress_xy is None else (progress_xy[1], progress_xy[1], 0.0)
 
     return RichRawSample(
         ts=sample_ts,
         body_position_xy=body_position_xy,
-        body_angle=body_angle,
+        body_angle=None,
         hammer_anchor_xy=hammer_anchor_xy,
         hammer_tip_xy=hammer_tip_xy,
-        hammer_contact_flags=hammer_contact_flags,
-        hammer_contact_normal_xy=hammer_contact_normal_xy,
+        hammer_contact_flags=None,
+        hammer_contact_normal_xy=None,
         progress_features=progress_features,
         valid_mask=valid_mask,
         layout_discovered_at=lane.layout.discovered_at,
@@ -248,10 +235,11 @@ def build_rich_state_snapshot_from_raw(
         body_velocity_xy = estimate_velocity(accumulator.previous_body, body_current)
         accumulator.previous_body = body_current
 
-    body_angle = sample.body_angle if valid_mask["body_angle"] and sample.body_angle is not None else 0.0
+    body_angle_valid = bool(valid_mask.get("body_angle", False))
+    body_angle = sample.body_angle if body_angle_valid and sample.body_angle is not None else 0.0
     body_rotation_sin_cos = angle_to_sin_cos(body_angle)
     body_angular_velocity = 0.0
-    if valid_mask["body_angle"] and sample.body_angle is not None:
+    if body_angle_valid and sample.body_angle is not None:
         body_angle_current = AngleSample(ts=sample.ts, angle=sample.body_angle)
         body_angular_velocity = estimate_angular_velocity(accumulator.previous_body_angle, body_angle_current)
         accumulator.previous_body_angle = body_angle_current
@@ -274,12 +262,12 @@ def build_rich_state_snapshot_from_raw(
 
     hammer_contact_flags = (
         sample.hammer_contact_flags
-        if valid_mask["hammer_contact_flags"] and sample.hammer_contact_flags is not None
+        if valid_mask.get("hammer_contact_flags", False) and sample.hammer_contact_flags is not None
         else (0.0, 0.0)
     )
     hammer_contact_normal_xy = (
         sample.hammer_contact_normal_xy
-        if valid_mask["hammer_contact_normal_xy"] and sample.hammer_contact_normal_xy is not None
+        if valid_mask.get("hammer_contact_normal_xy", False) and sample.hammer_contact_normal_xy is not None
         else (0.0, 0.0)
     )
 
@@ -514,6 +502,48 @@ def _completed_valid_mask(mask: dict[str, bool]) -> dict[str, bool]:
     return completed
 
 
+def _read_grouped_memory(reader: MemReader, requests: dict[str, tuple[int | None, int]]) -> dict[str, bytes]:
+    page_size = 4096
+    groups: dict[int, dict[str, object]] = {}
+    result: dict[str, bytes] = {}
+
+    for name, (addr, size) in requests.items():
+        if addr is None:
+            continue
+        group_key = addr // page_size
+        group = groups.setdefault(group_key, {"start": addr, "end": addr + size, "fields": []})
+        group["start"] = min(int(group["start"]), addr)
+        group["end"] = max(int(group["end"]), addr + size)
+        group["fields"].append((name, addr, size))
+
+    for group in groups.values():
+        start = int(group["start"])
+        try:
+            data = reader.read(start, int(group["end"]) - start)
+        except OSError:
+            continue
+        for name, addr, size in group["fields"]:
+            offset = addr - start
+            result[name] = data[offset : offset + size]
+    return result
+
+
+def _unpack_vec2_field(
+    fields: dict[str, bytes],
+    valid_mask: dict[str, bool],
+    field_name: str,
+    *,
+    source_name: str | None = None,
+) -> tuple[float, float] | None:
+    if not valid_mask[field_name]:
+        return None
+    raw = fields.get(source_name or field_name)
+    if raw is None or len(raw) < 8:
+        valid_mask[field_name] = False
+        return None
+    return struct.unpack("<ff", raw[:8])
+
+
 def _read_optional_layout_vec2(
     reader: MemReader,
     addr: int | None,
@@ -639,7 +669,6 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=0.1, help="Seconds between emitted samples.")
     parser.add_argument(
         "--rich-snapshot-interval",
-        "--unity-snapshot-interval",
         dest="rich_snapshot_interval",
         type=float,
         default=0.5,

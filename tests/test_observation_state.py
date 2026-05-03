@@ -62,8 +62,25 @@ class _FakeReader:
         return self.ptr[addr]
 
     def read(self, addr: int, size: int) -> bytes:
-        data = self.raw[addr]
-        return data[:size]
+        if addr in self.raw:
+            return self.raw[addr][:size]
+        data = bytearray(b"\x00" * size)
+        for field_addr, value in self.vec2.items():
+            if addr <= field_addr and field_addr + 8 <= addr + size:
+                offset = field_addr - addr
+                data[offset : offset + 8] = struct.pack("<ff", *value)
+        for field_addr, value in self.f32.items():
+            if addr <= field_addr and field_addr + 4 <= addr + size:
+                offset = field_addr - addr
+                data[offset : offset + 4] = struct.pack("<f", value)
+        for field_addr, value in self.u8.items():
+            if addr <= field_addr < addr + size:
+                data[field_addr - addr] = value
+        for field_addr, value in self.ptr.items():
+            if addr <= field_addr and field_addr + 8 <= addr + size:
+                offset = field_addr - addr
+                data[offset : offset + 8] = struct.pack("<Q", value)
+        return bytes(data)
 
 
 class _FakeReaderContext(_FakeReader):
@@ -192,11 +209,11 @@ class ObservationStateTests(unittest.TestCase):
 
         self.assertEqual(sample.ts, 101.0)
         self.assertEqual(sample.body_position_xy, (6.0, 7.0))
-        self.assertAlmostEqual(sample.body_angle or 0.0, math.pi / 4.0)
+        self.assertIsNone(sample.body_angle)
         self.assertEqual(sample.hammer_anchor_xy, (2.0, 3.0))
         self.assertEqual(sample.hammer_tip_xy, (4.0, 6.0))
-        self.assertEqual(sample.hammer_contact_flags, (1.0, 1.0))
-        self.assertEqual(sample.hammer_contact_normal_xy, (-0.5, 0.75))
+        self.assertIsNone(sample.hammer_contact_flags)
+        self.assertIsNone(sample.hammer_contact_normal_xy)
         self.assertEqual(sample.progress_features, (7.0, 7.0, 0.0))
         self.assertTrue(all(sample.valid_mask.values()))
         self.assertEqual(sample.layout_discovered_at, 77.0)
@@ -234,17 +251,16 @@ class ObservationStateTests(unittest.TestCase):
         self.assertEqual(rich_snapshot.ts, 101.0)
         self.assertEqual(rich_snapshot.body_position_xy, (6.0, 7.0))
         self.assertEqual(rich_snapshot.body_velocity_xy, (2.0, 2.0))
-        self.assertAlmostEqual(rich_snapshot.body_rotation_sin_cos[0], math.sin(math.pi / 4.0))
-        self.assertAlmostEqual(rich_snapshot.body_rotation_sin_cos[1], math.cos(math.pi / 4.0))
+        self.assertEqual(rich_snapshot.body_rotation_sin_cos, (0.0, 1.0))
         self.assertEqual(rich_snapshot.hammer_anchor_xy, (2.0, 3.0))
         self.assertEqual(rich_snapshot.hammer_tip_xy, (4.0, 6.0))
-        self.assertEqual(rich_snapshot.hammer_contact_flags, (1.0, 0.0))
+        self.assertEqual(rich_snapshot.hammer_contact_flags, (0.0, 0.0))
         self.assertEqual(rich_snapshot.progress_features, (7.0, 7.0, 0.0))
         self.assertEqual(rich_snapshot.source, "raw_memory")
         self.assertEqual(rich_snapshot.layout_discovered_at, 88.0)
         self.assertTrue(rich_snapshot.valid)
         self.assertEqual(accumulator.previous_body, PositionSample(ts=101.0, x=6.0, y=7.0))
-        self.assertEqual(accumulator.previous_body_angle, AngleSample(ts=101.0, angle=math.pi / 4.0))
+        self.assertEqual(accumulator.previous_body_angle, AngleSample(ts=100.0, angle=0.0))
         self.assertAlmostEqual(accumulator.previous_hammer_angle.angle, math.atan2(3.0, 2.0))
 
     def test_invalid_rich_fields_still_serialize_cleanly(self) -> None:
@@ -289,11 +305,8 @@ class ObservationStateTests(unittest.TestCase):
             payload["rich_state_valid_mask"],
             {
                 "body_position_xy": False,
-                "body_angle": False,
                 "hammer_anchor_xy": False,
                 "hammer_tip_xy": False,
-                "hammer_contact_flags": False,
-                "hammer_contact_normal_xy": False,
                 "progress_features": False,
             },
         )

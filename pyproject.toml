@@ -8,12 +8,19 @@ version = "0.1.0"
 description = "Runtime tooling for Getting Over It RL experiments on Linux."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "gymnasium>=1.0",
+    "mss>=10.0",
+    "numpy>=2.0",
+]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+]
+rl = [
+    "stable-baselines3>=2.7",
 ]
 
 [project.scripts]
@@ -21,6 +28,10 @@ aiget-live-position = "aiget.live_position:main"
 aiget-memory-probe = "aiget.memory_probe:main"
 aiget-observation-schema = "aiget.observation_schema:main"
 aiget-observation-state = "aiget.observation_state:main"
+aiget-benchmark-observation = "aiget.benchmark_observation:main"
+aiget-check-env = "aiget.check_env:main"
+aiget-random-rollout = "aiget.random_rollout:main"
+aiget-train-sac = "aiget.train_sac:main"
 aiget-ptrace-il2cpp = "aiget.ptrace_il2cpp:main"
 
 [tool.setuptools]

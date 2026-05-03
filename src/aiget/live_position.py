@@ -285,7 +285,7 @@ def freeze_fast_cursor_lane(
 
 
 def read_fast_cursor_sample(reader: MemReader, lane: FastCursorLane, ts: float | None = None) -> FastCursorSample:
-    addr = resolve_candidate_addr(reader, lane.roots(), lane.candidate)
+    addr = lane.current_addr
     x, y = reader.read_vec2(addr)
     return FastCursorSample(
         ts=time.time() if ts is None else ts,
@@ -294,6 +294,10 @@ def read_fast_cursor_sample(reader: MemReader, lane: FastCursorLane, ts: float |
         x=x,
         y=y,
     )
+
+
+def read_fast_cursor_xy(reader: MemReader, lane: FastCursorLane) -> tuple[float, float]:
+    return reader.read_vec2(lane.current_addr)
 
 
 def emit_sample(output_format: str, sample: FastCursorSample) -> None:

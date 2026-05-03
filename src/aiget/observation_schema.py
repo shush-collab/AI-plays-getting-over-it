@@ -46,38 +46,25 @@ class ObservationSchema:
         }
 
 
-def build_observation_schema(body_ray_count: int = 32, hammer_ray_count: int = 32, action_dim: int = 2) -> ObservationSchema:
+def build_observation_schema(body_ray_count: int = 0, hammer_ray_count: int = 0, action_dim: int = 2) -> ObservationSchema:
     return ObservationSchema(
         version="v1",
         body_ray_count=body_ray_count,
         hammer_ray_count=hammer_ray_count,
         action_dim=action_dim,
         features=(
-            FeatureSpec("body_position_xy", 2, "Pot/body world position in Unity units."),
-            FeatureSpec("body_velocity_xy", 2, "Pot/body linear velocity in world units per second."),
-            FeatureSpec("body_rotation_sin_cos", 2, "Pot/body rotation encoded as sin(theta), cos(theta)."),
-            FeatureSpec("body_angular_velocity", 1, "Pot/body angular velocity."),
-            FeatureSpec("hammer_anchor_xy", 2, "Hammer pivot or anchor world position."),
-            FeatureSpec("hammer_tip_xy", 2, "Hammer tip world position."),
-            FeatureSpec("hammer_direction_sin_cos", 2, "Hammer direction encoded as sin(theta), cos(theta)."),
-            FeatureSpec("hammer_angular_velocity", 1, "Hammer angular velocity."),
             FeatureSpec("cursor_position_xy", 2, "Live `fakeCursorRB` position."),
             FeatureSpec("cursor_velocity_xy", 2, "Live `fakeCursorRB` linear velocity."),
-            FeatureSpec("body_contact_flags", 2, "Binary flags: touching terrain, airborne."),
-            FeatureSpec("body_contact_normal_xy", 2, "Primary terrain contact normal for the pot/body."),
-            FeatureSpec("hammer_contact_flags", 2, "Binary flags: hammer touching terrain, hammer sliding."),
-            FeatureSpec("hammer_contact_normal_xy", 2, "Primary terrain contact normal for the hammer."),
+            FeatureSpec("body_position_xy", 2, "Pot/body world position when raw layout resolves it."),
+            FeatureSpec("body_velocity_xy", 2, "Pot/body linear velocity derived from rich snapshots."),
+            FeatureSpec("hammer_tip_xy", 2, "Hammer tip world position when raw layout resolves it."),
+            FeatureSpec("hammer_direction_sin_cos", 2, "Hammer direction encoded as sin(theta), cos(theta)."),
             FeatureSpec("progress_features", 3, "Current height, best height this episode, time since last upward progress."),
             FeatureSpec("previous_action", action_dim, "Previous action sent by the policy."),
             FeatureSpec(
-                "body_lidar_distances",
-                body_ray_count,
-                f"Normalized ray distances fired from the body fan ({body_ray_count} rays).",
-            ),
-            FeatureSpec(
-                "hammer_lidar_distances",
-                hammer_ray_count,
-                f"Normalized ray distances fired from the hammer-tip fan ({hammer_ray_count} rays).",
+                "valid_mask",
+                15,
+                "Binary validity mask for cursor, body, hammer, and progress state values.",
             ),
         ),
     )
@@ -106,8 +93,8 @@ def to_markdown(schema: ObservationSchema) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Print the planned RL observation schema for AIget.")
-    parser.add_argument("--body-rays", type=int, default=32, help="Number of synthetic LIDAR rays from the body.")
-    parser.add_argument("--hammer-rays", type=int, default=32, help="Number of synthetic LIDAR rays from the hammer tip.")
+    parser.add_argument("--body-rays", type=int, default=0, help="Reserved; LIDAR is not part of v1.")
+    parser.add_argument("--hammer-rays", type=int, default=0, help="Reserved; LIDAR is not part of v1.")
     parser.add_argument("--action-dim", type=int, default=2, help="Number of action values echoed back as previous action.")
     parser.add_argument("--format", choices=("json", "markdown"), default="json", help="Output format.")
     args = parser.parse_args()

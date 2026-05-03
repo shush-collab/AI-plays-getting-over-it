@@ -7,10 +7,11 @@ This roadmap focuses on making live observation safe enough for continuous RL us
 
 - The fast cursor signal is validated and can be streamed continuously from raw memory.
 - Rich live streaming no longer calls ptrace or IL2CPP remote execution after startup discovery.
-- The rich observation path now runs as a slower raw-memory background lane driven by a reusable `ResolvedLiveLayout`.
+- The rich observation path now runs as a slower batched raw-memory background lane driven by a reusable `ResolvedLiveLayout`.
 - Startup is now cache-first, time-bounded, and allowed to fall back to a partial rich layout.
-- The live payload includes rich-state metadata such as `rich_state_ts`, `rich_state_age`, `rich_state_valid_mask`, and `rich_state_source`.
-- The current bottleneck is observation architecture, not data discovery.
+- `GettingOverItEnv` exposes a Gymnasium API with Dict observations:
+  `state` is a fixed 32-float vector and `image` is an 84x84 grayscale frame.
+- The current bottleneck is rollout collection and reward/reset quality, not observation debugging.
 
 ## Goal
 
@@ -33,13 +34,30 @@ Move from scattered live reads toward one controlled observation pipeline:
 
 ## Phase 2: Clean Observation Interface
 
-- [ ] Task 5: Create one observation builder API that merges fast and slow state.
-- [ ] Task 6: Add metrics for observer rate, rich-snapshot rate, playability, and overhead.
+- [x] Task 5: Create one observation builder API that merges fast and slow state.
+- [x] Task 6: Add metrics for observer rate, rich-snapshot rate, playability, and overhead.
+- [x] Add a Gymnasium `GettingOverItEnv`.
+- [x] Add Linux uinput mouse action sending.
+- [x] Add a benchmark command for observation latency.
+- [x] Add background image observation for terrain context.
+- [x] Add action repeat/frame skip.
+- [x] Split benchmark active step time from intentional sleep time.
+- [x] Add SB3 `check_env` smoke command.
+- [x] Add random rollout smoke command.
+
+## Phase 2.5: Rollout Readiness
+
+- [ ] Add reliable game reset or episode bootstrap.
+- [x] Add basic termination/truncation detection.
+- [x] Add boring progress-shaped v1 reward.
+- [x] Add guarded SAC/PPO training entrypoint.
+- [ ] Verify real reset/checkpoint restore before real training.
+- [ ] Tune v1 reward against real gameplay after reset is reliable.
 
 ## Phase 3: Replace External Rich Reads
 
-- [ ] Task 7: Move rich-state assembly onto the game side.
-- [ ] Task 8: Expose one stable exported snapshot to the RL process.
+- [ ] Task 7: Move rich-state assembly onto the game side with a BepInEx IL2CPP plugin.
+- [ ] Task 8: Expose one stable shared-memory observation blob to the RL process.
 - [ ] Task 9: Keep or retire the separate fast cursor lane based on exporter responsiveness.
 
 ## Definition Of Success
@@ -59,4 +77,7 @@ Phase 1 is complete.
 - Remote rich live streaming is removed.
 - Raw rich live layout discovery is added.
 - Cache-first partial startup is added.
-- The remaining major architectural work is the unified observation API plus eventual in-game rich-state export.
+- The remaining major architectural work is reset/rollout handling plus eventual in-game rich-state export.
+- Live benchmark currently separates active work from intentional sleep; this prevents chasing
+  scheduler sleep as if it were memory-read latency.
+- Training remains blocked on real reset/checkpoint restore, not on observation throughput.

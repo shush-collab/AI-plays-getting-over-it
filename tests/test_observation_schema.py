@@ -16,10 +16,10 @@ class ObservationSchemaTests(unittest.TestCase):
         features = data["features"]
 
         self.assertEqual(data["version"], "v1")
-        self.assertEqual(data["flat_dim"], 42)
+        self.assertEqual(data["flat_dim"], 33)
         self.assertEqual(features[0]["offset"], 0)
-        self.assertEqual(features[-1]["offset"], 36)
-        self.assertEqual(features[-1]["size"], 6)
+        self.assertEqual(features[-1]["offset"], 18)
+        self.assertEqual(features[-1]["size"], 15)
 
     def test_markdown_renders_table(self) -> None:
         schema = build_observation_schema(body_ray_count=2, hammer_ray_count=2, action_dim=2)
