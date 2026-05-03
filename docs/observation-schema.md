@@ -12,6 +12,9 @@ The live JSON stream from `goi_observation_state.py` also includes extra transpo
 - `rich_state_ts`
 - `rich_state_age`
 - `rich_state_valid`
+- `rich_state_valid_mask`
+- `rich_state_source`
+- `layout_discovered_at`
 
 Default settings:
 - schema version: `v1`
@@ -41,19 +44,19 @@ Current groups in order:
 - hammer LIDAR distances
 
 Currently implemented live readers:
-- `body_position_xy` from `PoseControl.potMeshHub`
-- `body_velocity_xy` derived from successive body samples
-- `body_rotation_sin_cos` from the live `potMeshHub` transform quaternion
-- `body_angular_velocity` derived from successive body rotation samples
-- `hammer_anchor_xy` from `PoseControl.handle`
-- `hammer_tip_xy` from `PoseControl.tip`
-- `hammer_direction_sin_cos` derived from `handle -> tip`
-- `hammer_angular_velocity` derived from successive hammer direction samples
 - `cursor_position_xy`
 - `cursor_velocity_xy` derived from successive cursor samples
-- `hammer_contact_flags` from `HammerCollisions.contacts` and `HammerCollisions.slide`
-- `hammer_contact_normal_xy` inferred from the first `ContactPoint2D` record in `HammerCollisions.contacts`
-- `progress_features` as current height, best height, and time since last upward progress
+- `body_position_xy` when startup discovery resolves a raw-readable body position address
+- `body_velocity_xy` derived from successive raw body samples when `body_position_xy` is valid
+- `body_rotation_sin_cos` when startup discovery resolves a raw-readable body angle
+- `body_angular_velocity` derived from successive raw body-angle samples when `body_angle` is valid
+- `hammer_anchor_xy` when startup discovery resolves a raw-readable hammer-anchor address
+- `hammer_tip_xy` when startup discovery resolves a raw-readable hammer-tip address
+- `hammer_direction_sin_cos` derived from raw hammer anchor/tip samples when both are valid
+- `hammer_angular_velocity` derived from successive raw hammer-direction samples when both are valid
+- `hammer_contact_flags` from raw `HammerCollisions` fields and the managed contacts array
+- `hammer_contact_normal_xy` from the first raw `ContactPoint2D` record when available
+- `progress_features` from raw height plus local progress tracking when body height is valid
 - `previous_action` echoed from the CLI input
 
 Current observation architecture:
@@ -61,12 +64,19 @@ Current observation architecture:
 - Fast lane:
   - `cursor_position_xy`
   - `cursor_velocity_xy`
-- Slow rich lane:
+- Startup discovery:
+  - ptrace/IL2CPP authoritative sampling
+  - raw rich-layout resolution
+  - cache-first layout reuse
+  - optional one-shot layout validation
+- Raw-memory live lane:
   - body state
   - hammer state
   - hammer contact state
   - progress features
-- The fast loop reuses the latest rich snapshot instead of blocking on a fresh slow update.
+- The fast loop reuses the latest rich snapshot instead of blocking on a fresh raw rich-state update.
+- Fields that cannot be resolved to raw memory stay zero/default in the payload and are marked `false` in `rich_state_valid_mask`.
+- The default startup path resolves must-have rich fields first and leaves optional fields invalid rather than blocking the stream.
 
 Still missing from the current live stream:
 - `body_contact_flags`
@@ -83,7 +93,19 @@ python goi_observation_state.py --format json
 Continuous split-lane observation stream:
 
 ```bash
-python goi_observation_state.py --format text --samples 0 --interval 0.05 --unity-snapshot-interval 0.2
+python goi_observation_state.py --format text --samples 0 --interval 0.05 --rich-snapshot-interval 0.2
+```
+
+Resolve and validate the raw rich layout once:
+
+```bash
+python goi_observation_state.py --format json --validate-layout --live-layout-cache /tmp/goi-layout.json
+```
+
+Fast partial startup:
+
+```bash
+python goi_observation_state.py --format json --layout-discovery-timeout 1.5
 ```
 
 Print the full schema with offsets and sizes:

@@ -7,7 +7,8 @@ Current coverage is focused on:
 - schema formatting
 - CLI wrapper help/output
 - fast cursor lane helpers
-- slow rich-state batching helpers
+- live-layout persistence helpers
+- slow raw rich-state batching helpers
 - ptrace helper safety utilities that can be checked without a live game process
 
 Run the suite with:

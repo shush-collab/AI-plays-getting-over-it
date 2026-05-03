@@ -47,14 +47,17 @@ The current focus is live observation architecture for RL.
 What is working now:
 - `src/aiget/ptrace_il2cpp.py` resolves the live `PlayerControl` object, its `fakeCursorRB` field, and queries Unity for the true `Rigidbody2D.position`.
 - `src/aiget/live_position.py` freezes the validated raw-memory cursor path into an explicit fast observation lane and streams `x,y` from `/proc/<pid>/mem`.
+- `src/aiget/live_layout.py` freezes a reusable rich raw-memory layout at startup and can save/load/validate it.
 - `src/aiget/memory_probe.py` is a helper for memory inspection and direct vector watching.
 - `src/aiget/observation_schema.py` defines the planned RL observation vector layout.
-- `src/aiget/observation_state.py` uses two explicit lanes:
+- `src/aiget/observation_state.py` uses startup discovery plus two raw-memory live lanes:
   - a fast cursor lane from raw memory
-  - a slower rich-state lane for body, hammer, contacts, and progress
-- The rich lane is packaged into one `RichStateSnapshot` object and updated in the background.
+  - a slower raw rich-state lane for body, hammer, contacts, and progress
+- The live rich lane is packaged into one `RichStateSnapshot` object and updated in the background through persistent `MemReader` instances only.
 - When discovery misses a moving calibration sample, the live stream falls back to the currently validated cursor path `fakeCursorRB_native + 0xA8`.
-- The fast loop now reuses the latest rich snapshot without blocking on fresh slow-lane updates.
+- Optional startup validation can compare the resolved raw layout to authoritative ptrace samples once and then exit the expensive path.
+- `goi_observation_state.py` is now cache-first for rich layout startup and will fail fast to a partial layout instead of blocking on optional rich-field discovery.
+- The fast loop now reuses the latest rich snapshot without blocking on fresh background updates.
 - The current observation architecture roadmap lives in `docs/observation-roadmap.md`.
 
 The current validated raw-memory path is:
@@ -62,9 +65,11 @@ The current validated raw-memory path is:
 
 What is still not solved:
 
-- The rich observation lane still depends on external ptrace/Unity calls.
-- Higher slow-lane refresh rates can still hurt playability.
+- Some rich fields still cannot be resolved to raw memory and are emitted as zero/default values with `rich_state_valid_mask` set to `false`.
+- The default startup path only resolves must-have rich fields; optional fields such as body angle and hammer anchor/tip stay invalid unless explicitly requested.
+- Higher rich-snapshot refresh rates can still hurt playability even though the live path is now raw-memory only.
 - The final RL-facing observation builder API does not exist yet.
+- The eventual in-game exported observation blob does not exist yet.
 
 ## Quick Start
 
@@ -179,7 +184,19 @@ python goi_observation_state.py --format json
 Continuous split-lane observation stream:
 
 ```bash
-python goi_observation_state.py --format text --samples 0 --interval 0.05 --unity-snapshot-interval 0.2
+python goi_observation_state.py --format text --samples 0 --interval 0.05 --rich-snapshot-interval 0.2
+```
+
+Resolve once, validate once, and save the raw rich layout for the current PID:
+
+```bash
+python goi_observation_state.py --format json --validate-layout --live-layout-cache /tmp/goi-layout.json
+```
+
+Fast startup with the default cache-first partial-layout policy:
+
+```bash
+python goi_observation_state.py --format json --layout-discovery-timeout 1.5
 ```
 
 Echo a previous action into the payload:
@@ -213,7 +230,7 @@ Observation architecture progress is tracked in `docs/observation-roadmap.md`.
 
 Remaining project backlog:
 
-- [ ] Finish the remaining observation-state readers, especially body-contact state and the synthetic LIDAR features.
+- [ ] Finish the remaining raw-readable observation fields, especially body-contact state and the synthetic LIDAR features.
 - [ ] Implement synthetic LIDAR / raycasting against the game world.
 - [ ] Wire control inputs into the game process for training.
 - [ ] Build the unified observation + action loop for rollout collection.

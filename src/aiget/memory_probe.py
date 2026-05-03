@@ -181,6 +181,24 @@ def fmt_addr(addr: int) -> str:
     return f"0x{addr:016X}"
 
 
+def read_optional_f32(reader: MemReader, addr: int | None) -> float | None:
+    if addr is None:
+        return None
+    try:
+        return reader.read_f32(addr)
+    except OSError:
+        return None
+
+
+def read_optional_vec2(reader: MemReader, addr: int | None) -> tuple[float, float] | None:
+    if addr is None:
+        return None
+    try:
+        return reader.read_vec2(addr)
+    except OSError:
+        return None
+
+
 def describe_addr(reader: MemReader, addr: int) -> str:
     region = reader.region_for(addr)
     if not region:

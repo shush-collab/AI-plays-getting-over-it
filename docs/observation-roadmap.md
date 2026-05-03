@@ -6,8 +6,10 @@ This roadmap focuses on making live observation safe enough for continuous RL us
 ## Current State
 
 - The fast cursor signal is validated and can be streamed continuously from raw memory.
-- The rich observation path now runs as a slower background lane that publishes the latest `RichStateSnapshot`.
-- The live payload includes rich-state metadata such as `rich_state_ts`, `rich_state_age`, and `rich_state_valid`.
+- Rich live streaming no longer calls ptrace or IL2CPP remote execution after startup discovery.
+- The rich observation path now runs as a slower raw-memory background lane driven by a reusable `ResolvedLiveLayout`.
+- Startup is now cache-first, time-bounded, and allowed to fall back to a partial rich layout.
+- The live payload includes rich-state metadata such as `rich_state_ts`, `rich_state_age`, `rich_state_valid_mask`, and `rich_state_source`.
 - The current bottleneck is observation architecture, not data discovery.
 
 ## Goal
@@ -25,6 +27,9 @@ Move from scattered live reads toward one controlled observation pipeline:
 - [x] Task 2: Split observation into explicit fast and slow lanes.
 - [x] Task 3: Batch slow-lane reads into one `RichStateSnapshot` object.
 - [x] Task 4: Allow the policy loop to reuse the latest rich snapshot without blocking.
+- [x] Remove remote rich live streaming from the default path.
+- [x] Add startup-only rich raw-layout discovery and optional validation.
+- [x] Make rich-layout startup cache-first and time-bounded with partial fallback.
 
 ## Phase 2: Clean Observation Interface
 
@@ -49,5 +54,9 @@ Move from scattered live reads toward one controlled observation pipeline:
 Phase 1 is complete.
 
 - The fast cursor lane is frozen and reusable.
-- The slow rich-state lane is explicit, batched, and non-blocking from the fast loop's point of view.
+- The slow rich-state lane is explicit, batched, raw-memory only, and non-blocking from the fast loop's point of view.
+- Split lanes are done.
+- Remote rich live streaming is removed.
+- Raw rich live layout discovery is added.
+- Cache-first partial startup is added.
 - The remaining major architectural work is the unified observation API plus eventual in-game rich-state export.
