@@ -10,7 +10,7 @@ This roadmap focuses on making live observation safe enough for continuous RL us
 - The rich observation path now runs as a slower batched raw-memory background lane driven by a reusable `ResolvedLiveLayout`.
 - Startup is now cache-first, time-bounded, and allowed to fall back to a partial rich layout.
 - `GettingOverItEnv` exposes a Gymnasium API with Dict observations:
-  `state` is a fixed 32-float vector and `image` is an 84x84 grayscale frame.
+  `state` is a fixed 32-float vector and `image` is a stacked 84x84 grayscale frame.
 - The current bottleneck is rollout collection and reward/reset quality, not observation debugging.
 
 ## Goal
@@ -40,6 +40,7 @@ Move from scattered live reads toward one controlled observation pipeline:
 - [x] Add Linux uinput mouse action sending.
 - [x] Add a benchmark command for observation latency.
 - [x] Add background image observation for terrain context.
+- [x] Add 4-frame image stacking for visual motion.
 - [x] Add action repeat/frame skip.
 - [x] Split benchmark active step time from intentional sleep time.
 - [x] Add SB3 `check_env` smoke command.
@@ -51,6 +52,8 @@ Move from scattered live reads toward one controlled observation pipeline:
 - [x] Add basic termination/truncation detection.
 - [x] Add boring progress-shaped v1 reward.
 - [x] Add guarded SAC/PPO training entrypoint.
+- [x] Add relaunch/save-restore reset backend scaffolding.
+- [x] Add strict image checks and reward-variance preflight guards.
 - [ ] Verify real reset/checkpoint restore before real training.
 - [ ] Tune v1 reward against real gameplay after reset is reliable.
 

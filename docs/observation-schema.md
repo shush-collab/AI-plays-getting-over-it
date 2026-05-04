@@ -9,7 +9,7 @@ Default settings:
 - hammer rays: `0`
 - action dimension: `2`
 - state vector dimension: `32`
-- image shape: `(84, 84, 1)`
+- image shape: `(84, 84, 4)`
 - image dtype/range: `uint8`, `[0, 255]`
 
 Current groups in order:
@@ -58,6 +58,7 @@ Runtime architecture:
 - The fast lane reads `fakeCursorRB_native + 0xA8` directly.
 - The rich lane reads batched raw address groups in a background thread.
 - The image lane captures low-resolution grayscale frames in a background thread.
+- The image observation stacks the latest 4 grayscale frames so the visual branch can infer motion.
 - `GettingOverItEnv.step()` never waits for a fresh rich snapshot.
 - `GettingOverItEnv.step()` also does not capture screen frames synchronously.
 

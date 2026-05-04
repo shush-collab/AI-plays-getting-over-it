@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import signal
 import subprocess
 import time
 from collections.abc import Sequence
+from pathlib import Path
 from threading import Event, Lock, Thread
 
 import gymnasium as gym
@@ -42,7 +45,13 @@ from .observation_vector import (
 RICH_INDEX = {name: index for index, name in enumerate(RICH_VALUE_FIELDS)}
 STATE_OBS_KEY = "state"
 IMAGE_OBS_KEY = "image"
-IMAGE_SHAPE = (84, 84, 1)
+IMAGE_HEIGHT = 84
+IMAGE_WIDTH = 84
+IMAGE_CHANNELS = 4
+IMAGE_SHAPE = (IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS)
+CAPTURE_FRAME_SHAPE = (IMAGE_HEIGHT, IMAGE_WIDTH, 1)
+RESET_ATTACH = "attach"
+RESET_RELAUNCH = "relaunch"
 
 
 class GettingOverItEnv(gym.Env):
@@ -84,6 +93,11 @@ class GettingOverItEnv(gym.Env):
         use_layout_cache: bool = True,
         discover_rich_layout: bool = False,
         launch_command: Sequence[str] | None = None,
+        reset_backend: str = RESET_ATTACH,
+        clean_save_path: str | None = None,
+        active_save_path: str | None = None,
+        game_ready_timeout: float = 30.0,
+        kill_existing_on_reset: bool = True,
         action_sender: ActionSender | None = None,
         enable_uinput: bool = True,
         uinput_device: str = "/dev/uinput",
@@ -91,7 +105,11 @@ class GettingOverItEnv(gym.Env):
         max_dy: int = 40,
         capture_region: CaptureRegion | None = None,
         enable_image: bool = True,
-        image_hz: float = 10.0,
+        image_hz: float = 30.0,
+        strict_image: bool = False,
+        image_ready_timeout: float = 3.0,
+        image_max_age: float = 0.25,
+        image_std_threshold: float = 2.0,
         copy_observation: bool = True,
         debug_json: bool = False,
         debug_every_n: int = 30,
@@ -111,6 +129,13 @@ class GettingOverItEnv(gym.Env):
         self.use_layout_cache = use_layout_cache
         self.discover_rich_layout = discover_rich_layout
         self.launch_command = tuple(launch_command) if launch_command is not None else None
+        if reset_backend not in (RESET_ATTACH, RESET_RELAUNCH):
+            raise ValueError(f"reset_backend must be 'attach' or 'relaunch', got {reset_backend!r}")
+        self.reset_backend = reset_backend
+        self.clean_save_path = clean_save_path
+        self.active_save_path = active_save_path
+        self.game_ready_timeout = game_ready_timeout
+        self.kill_existing_on_reset = kill_existing_on_reset
         self._provided_action_sender = action_sender
         self.enable_uinput = enable_uinput
         self.uinput_device = uinput_device
@@ -119,6 +144,10 @@ class GettingOverItEnv(gym.Env):
         self.capture_region = capture_region
         self.enable_image = enable_image
         self.image_hz = image_hz
+        self.strict_image = strict_image
+        self.image_ready_timeout = image_ready_timeout
+        self.image_max_age = image_max_age
+        self.image_std_threshold = image_std_threshold
         self.copy_observation = copy_observation
         self.debug_json = debug_json
         self.debug_every_n = max(1, debug_every_n)
@@ -131,6 +160,7 @@ class GettingOverItEnv(gym.Env):
         self._obs = np.zeros(OBS_DIM, dtype=np.float32)
         self._image = np.zeros(IMAGE_SHAPE, dtype=np.uint8)
         self._image_latest = np.zeros(IMAGE_SHAPE, dtype=np.uint8)
+        self._image_frame = np.zeros(CAPTURE_FRAME_SHAPE, dtype=np.uint8)
         self._dict_obs = {STATE_OBS_KEY: self._obs, IMAGE_OBS_KEY: self._image}
         self._image_lock = Lock()
         self._image_stop = Event()
@@ -154,6 +184,8 @@ class GettingOverItEnv(gym.Env):
         self._episode_started_monotonic = 0.0
         self._last_progress_monotonic = 0.0
         self._game_freeze_detected = False
+        self._process_lost = False
+        self._last_reset_mode = "not_reset"
         self._last_progress_y = 0.0
         self._last_best_progress_y = 0.0
         self._action_sender: ActionSender | None = None
@@ -169,7 +201,7 @@ class GettingOverItEnv(gym.Env):
     def reset(self, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
         self.close()
-        self.pid = self.pid or self._launch_or_attach_game()
+        self.pid = self._reset_game_process()
         self._layout = self._load_or_resolve_layout(self.pid)
         self._fast_addr = self._layout.fast_cursor_addr
         self._mem_fd = os.open(f"/proc/{self.pid}/mem", os.O_RDONLY)
@@ -191,6 +223,7 @@ class GettingOverItEnv(gym.Env):
         self._episode_started_monotonic = time.monotonic()
         self._last_progress_monotonic = self._episode_started_monotonic
         self._game_freeze_detected = False
+        self._process_lost = False
         self._last_progress_y = 0.0
         self._last_best_progress_y = 0.0
         self._next_deadline = time.perf_counter()
@@ -208,13 +241,19 @@ class GettingOverItEnv(gym.Env):
             max_dy=self.max_dy,
         )
         self._frame_capture = (
-            FrameCapture(output_shape=IMAGE_SHAPE, region=self.capture_region, allow_blank=True)
+            FrameCapture(
+                output_shape=CAPTURE_FRAME_SHAPE,
+                region=self.capture_region,
+                allow_blank=not self.strict_image,
+            )
             if self.enable_image
             else None
         )
         self._read_rich_once()
         self._start_rich_thread()
         self._start_image_thread()
+        if self.enable_image and self.strict_image:
+            self._wait_for_valid_image()
         obs = self.read_observation()
         self._last_progress_y = float(obs[STATE_OBS_KEY][12])
         self._last_best_progress_y = float(obs[STATE_OBS_KEY][13])
@@ -234,12 +273,18 @@ class GettingOverItEnv(gym.Env):
 
         for _ in range(self.action_repeat):
             active_started = time.perf_counter()
-            if self._action_sender is not None:
-                self._action_sender.send_mouse_delta(
-                    (float(action_array[0]), float(action_array[1]))
-                )
-            obs = self.read_observation()
-            reward, terminated, truncated = self._compute_reward_and_done(obs[STATE_OBS_KEY])
+            try:
+                if self._action_sender is not None:
+                    self._action_sender.send_mouse_delta(
+                        (float(action_array[0]), float(action_array[1]))
+                    )
+                obs = self.read_observation()
+                reward, terminated, truncated = self._compute_reward_and_done(obs[STATE_OBS_KEY])
+            except ProcessLookupError:
+                reward = 0.0
+                terminated = True
+                truncated = False
+                self._process_lost = True
             total_reward += reward
             total_active += time.perf_counter() - active_started
 
@@ -278,7 +323,12 @@ class GettingOverItEnv(gym.Env):
         return self._dict_obs
 
     def read_observation_vector(self) -> np.ndarray:
-        data = os.pread(self._mem_fd, 8, self._fast_addr)
+        try:
+            data = os.pread(self._mem_fd, 8, self._fast_addr)
+        except OSError as exc:
+            raise ProcessLookupError("cursor read failed; game process likely died") from exc
+        if len(data) != 8:
+            raise ProcessLookupError("short cursor read; game process likely died")
         cursor_x, cursor_y = np.frombuffer(data, dtype="<f4", count=2)
         now = time.time()
         cursor = PositionSample(ts=now, x=float(cursor_x), y=float(cursor_y))
@@ -306,10 +356,19 @@ class GettingOverItEnv(gym.Env):
 
     def close(self) -> None:
         self._rich_stop.set()
-        self._rich_thread = None
         self._image_stop.set()
-        self._image_thread = None
-        self._frame_capture = None
+        if self._rich_thread is not None:
+            self._rich_thread.join(timeout=1.0)
+            self._rich_thread = None
+        if self._image_thread is not None:
+            image_thread = self._image_thread
+            image_thread.join(timeout=1.0)
+            if image_thread.is_alive():
+                self._frame_capture = None
+            self._image_thread = None
+        if self._frame_capture is not None:
+            self._frame_capture.close()
+            self._frame_capture = None
         if self._mem_fd >= 0:
             os.close(self._mem_fd)
             self._mem_fd = -1
@@ -320,6 +379,25 @@ class GettingOverItEnv(gym.Env):
             self._action_sender.close()
         self._action_sender = None
 
+    def _reset_game_process(self) -> int:
+        if self.reset_backend == RESET_ATTACH:
+            self._last_reset_mode = "attach_no_game_reset"
+            return self.pid or self._launch_or_attach_game()
+
+        if self.launch_command is None:
+            raise RuntimeError("reset_backend='relaunch' requires launch_command")
+        if self.clean_save_path is None or self.active_save_path is None:
+            raise RuntimeError(
+                "reset_backend='relaunch' requires clean_save_path and active_save_path"
+            )
+        if self.kill_existing_on_reset:
+            self._kill_existing_game()
+        self.pid = None
+        self._restore_save()
+        subprocess.Popen(self.launch_command)
+        self._last_reset_mode = "relaunch_save_restore"
+        return self._wait_for_game_process()
+
     def _launch_or_attach_game(self) -> int:
         try:
             return auto_pid()
@@ -327,15 +405,55 @@ class GettingOverItEnv(gym.Env):
             if self.launch_command is None:
                 raise
             subprocess.Popen(self.launch_command)
-            deadline = time.monotonic() + 30.0
+            return self._wait_for_game_process()
+
+    def _wait_for_game_process(self) -> int:
+        deadline = time.monotonic() + self.game_ready_timeout
+        while time.monotonic() < deadline:
+            try:
+                return auto_pid()
+            except RuntimeError:
+                time.sleep(0.5)
+        raise RuntimeError("GettingOverIt.x86_64 did not appear after launch_command") from None
+
+    def _kill_existing_game(self) -> None:
+        while True:
+            try:
+                pid = auto_pid()
+            except RuntimeError:
+                return
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+            deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
                 try:
-                    return auto_pid()
-                except RuntimeError:
-                    time.sleep(0.5)
-            raise RuntimeError(
-                "GettingOverIt.x86_64 did not appear after launch_command"
-            ) from None
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                os.kill(pid, signal.SIGKILL)
+
+    def _restore_save(self) -> None:
+        assert self.clean_save_path is not None
+        assert self.active_save_path is not None
+        clean = Path(self.clean_save_path).expanduser()
+        active = Path(self.active_save_path).expanduser()
+        if not clean.exists():
+            raise RuntimeError(f"clean save path does not exist: {clean}")
+        active.parent.mkdir(parents=True, exist_ok=True)
+        if clean.is_dir():
+            if active.exists() and not active.is_dir():
+                active.unlink()
+            if active.exists():
+                shutil.rmtree(active)
+            shutil.copytree(clean, active)
+        else:
+            if active.exists() and active.is_dir():
+                shutil.rmtree(active)
+            shutil.copy2(clean, active)
 
     def _load_or_resolve_layout(self, pid: int) -> ResolvedLiveLayout:
         if self.use_layout_cache:
@@ -394,6 +512,7 @@ class GettingOverItEnv(gym.Env):
         if self._frame_capture is None:
             self._image.fill(0)
             self._image_latest.fill(0)
+            self._image_frame.fill(0)
             return
         self._image_thread = Thread(
             target=self._image_loop,
@@ -411,7 +530,9 @@ class GettingOverItEnv(gym.Env):
                     assert capture is not None
                     frame = capture.read()
                     with self._image_lock:
-                        self._image_latest[:] = frame
+                        self._image_frame[:] = frame
+                        self._image_latest[:, :, :-1] = self._image_latest[:, :, 1:]
+                        self._image_latest[:, :, -1] = frame[:, :, 0]
                         self._image_ts = time.time()
                         self._image_updates += 1
                 except Exception as exc:
@@ -420,6 +541,29 @@ class GettingOverItEnv(gym.Env):
         finally:
             if capture is not None:
                 capture.close()
+
+    def _wait_for_valid_image(self) -> None:
+        deadline = time.monotonic() + self.image_ready_timeout
+        while time.monotonic() < deadline:
+            with self._image_lock:
+                updates = self._image_updates
+                image_age = 0.0 if self._image_ts <= 0.0 else time.time() - self._image_ts
+                image_std = float(self._image_latest.std())
+            if (
+                updates > 0
+                and image_age <= self.image_max_age
+                and image_std > self.image_std_threshold
+            ):
+                return
+            time.sleep(0.02)
+        with self._image_lock:
+            updates = self._image_updates
+            image_age = 0.0 if self._image_ts <= 0.0 else time.time() - self._image_ts
+            image_std = float(self._image_latest.std())
+        raise RuntimeError(
+            "image capture did not become valid: "
+            f"updates={updates} age={image_age:.3f}s std={image_std:.3f}"
+        )
 
     def _rich_loop(self) -> None:
         while not self._rich_stop.is_set():
@@ -530,9 +674,14 @@ class GettingOverItEnv(gym.Env):
             "dropped_rich_updates": self._dropped_rich_updates,
             "image_updates": self._image_updates,
             "image_age": 0.0 if self._image_ts <= 0.0 else max(0.0, time.time() - self._image_ts),
+            "image_mean": float(self._image_latest.mean()),
+            "image_std": float(self._image_latest.std()),
+            "image_min": int(self._image_latest.min()),
+            "image_max": int(self._image_latest.max()),
             "game_freeze_detected": self._game_freeze_detected,
+            "process_lost": self._process_lost,
             "step_timing": dict(self.last_step_timing),
-            "reset_mode": "attach_no_game_reset",
+            "reset_mode": self._last_reset_mode,
         }
 
     def _debug_payload(self, obs: np.ndarray, reward: float) -> dict[str, object]:

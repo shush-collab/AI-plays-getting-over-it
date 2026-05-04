@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 
+from .cli_utils import add_capture_region_args, capture_region_from_args
 from .env import IMAGE_OBS_KEY, STATE_OBS_KEY, GettingOverItEnv
 
 
@@ -24,6 +25,7 @@ def main() -> None:
         help="Random smoke-test steps after reset.",
     )
     parser.add_argument("--hz", type=float, default=30.0, help="Base env frame rate.")
+    parser.add_argument("--image-hz", type=float, default=30.0, help="Image capture rate.")
     parser.add_argument(
         "--action-repeat",
         type=int,
@@ -40,6 +42,12 @@ def main() -> None:
         action="store_true",
         help="Send random actions through uinput.",
     )
+    parser.add_argument(
+        "--allow-blank-image",
+        action="store_true",
+        help="Allow smoke validation to continue with blank/failed image capture.",
+    )
+    add_capture_region_args(parser)
     args = parser.parse_args()
 
     if not args.allow_attach_reset:
@@ -57,6 +65,9 @@ def main() -> None:
         pid=args.pid,
         dt=1.0 / args.hz,
         action_repeat=args.action_repeat,
+        image_hz=args.image_hz,
+        strict_image=not args.allow_blank_image,
+        capture_region=capture_region_from_args(args),
         enable_uinput=args.send_actions,
     )
     try:

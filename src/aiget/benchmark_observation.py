@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 
+from .cli_utils import add_capture_region_args, capture_region_from_args
 from .env import GettingOverItEnv
 
 
@@ -14,6 +15,9 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         pid=args.pid,
         dt=1.0 / args.hz,
         action_repeat=args.action_repeat,
+        image_hz=args.image_hz,
+        strict_image=args.strict_image,
+        capture_region=capture_region_from_args(args),
         rich_snapshot_interval=args.rich_snapshot_interval,
         enable_uinput=args.send_actions,
         live_layout_cache=args.live_layout_cache,
@@ -55,6 +59,9 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
             "missed_deadlines": missed_deadlines,
             "startup_ms": startup_ms,
             "dropped_rich_updates": info["dropped_rich_updates"],
+            "image_hz": info["image_updates"] / elapsed,
+            "image_age": info["image_age"],
+            "image_std": info["image_std"],
             "game_freeze_detected": "yes" if info["game_freeze_detected"] else "no",
         }
     finally:
@@ -73,6 +80,7 @@ def main() -> None:
     )
     parser.add_argument("--seconds", type=float, default=10.0, help="Benchmark duration.")
     parser.add_argument("--hz", type=float, default=30.0, help="Env step rate target.")
+    parser.add_argument("--image-hz", type=float, default=30.0, help="Image capture rate.")
     parser.add_argument(
         "--action-repeat",
         type=int,
@@ -106,6 +114,12 @@ def main() -> None:
         action="store_true",
         help="Run optional rich layout discovery during reset instead of using cache/fast-only.",
     )
+    parser.add_argument(
+        "--strict-image",
+        action="store_true",
+        help="Fail if image capture is blank, stale, or unavailable.",
+    )
+    add_capture_region_args(parser)
     args = parser.parse_args()
 
     result = run_benchmark(args)
@@ -121,6 +135,9 @@ def main() -> None:
         "missed_deadlines",
         "startup_ms",
         "dropped_rich_updates",
+        "image_hz",
+        "image_age",
+        "image_std",
         "game_freeze_detected",
     ):
         value = result[key]

@@ -57,7 +57,7 @@ What is working now:
 - `src/aiget/env.py` exposes `GettingOverItEnv`, a Gymnasium environment with Dict observations and normalized 2D mouse actions.
 - `src/aiget/action_sender.py` sends relative mouse movement through Linux `/dev/uinput`.
 - `src/aiget/observation_vector.py` builds the v1 fixed 32-float state vector.
-- `src/aiget/frame_capture.py` provides an 84x84 grayscale `uint8` image observation.
+- `src/aiget/frame_capture.py` provides a stacked 84x84 grayscale `uint8` image observation.
 - `src/aiget/ptrace_il2cpp.py` resolves the live `PlayerControl` object, its `fakeCursorRB` field, and queries Unity for the true `Rigidbody2D.position`.
 - `src/aiget/live_position.py` freezes the validated raw-memory cursor path into an explicit fast observation lane.
 - `src/aiget/live_layout.py` freezes a reusable rich raw-memory layout at startup and can save/load/validate it.
@@ -72,6 +72,7 @@ What is working now:
 - `src/aiget/train_sac.py` is a guarded SB3 `MultiInputPolicy` training entrypoint.
 - The training hot path uses fixed-address raw reads, preallocated numpy arrays, and no JSON serialization.
 - The image lane and rich lane update in background threads; `env.step()` consumes the latest snapshots without waiting for fresh ones.
+- Image capture defaults to 30Hz and the env returns a 4-frame stack for visual motion.
 - `action_repeat` defaults to `2`, so the default 30Hz frame loop gives about 15 policy decisions per second.
 - When discovery misses a moving calibration sample, the live stream falls back to the currently validated cursor path `fakeCursorRB_native + 0xA8`.
 - Optional startup validation can compare the resolved raw layout to authoritative ptrace samples once and then exit the expensive path.
@@ -85,9 +86,9 @@ The current validated raw-memory path is:
 What is still not solved:
 
 - Some rich fields still cannot be resolved to raw memory and are emitted as zero/default values with `rich_state_valid_mask` set to `false`.
-- The current default reset is attach-only. It clears Python episode state but does not restore the game to a known checkpoint.
+- The default reset is attach-only for smoke tests. A relaunch/save-restore backend exists for real training, but it needs configured game launch and save paths.
 - The eventual in-game exported observation blob does not exist yet.
-- Real training should not run until a reliable game reset/checkpoint restore exists.
+- Real training also refuses missing capture regions, blank/stale images, and constant reward preflight.
 
 ## Quick Start
 
@@ -173,7 +174,7 @@ from aiget.env import GettingOverItEnv
 env = GettingOverItEnv(dt=1.0 / 30.0)
 obs, info = env.reset()
 state = obs["state"]  # float32, shape=(32,)
-image = obs["image"]  # uint8, shape=(84, 84, 1)
+image = obs["image"]  # uint8, shape=(84, 84, 4)
 obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
 env.close()
 ```
@@ -202,8 +203,22 @@ Guarded SAC/PPO training entrypoint:
 python -m aiget.train_sac --algo sac --steps 10000
 ```
 
-Training refuses by default because real game reset is not implemented. Use
-`--allow-attach-reset` only for smoke tests, not real learning runs.
+Training refuses attach-only reset by default. Real training should use
+`--reset-backend relaunch`, a known clean save, an active save path, a launch
+command, and an explicit capture region:
+
+```bash
+python -m aiget.train_sac \
+  --algo sac \
+  --steps 10000 \
+  --reset-backend relaunch \
+  --clean-save-path /path/to/clean-save \
+  --active-save-path /path/to/runtime-save \
+  --launch-command /path/to/GettingOverIt.x86_64 \
+  --capture-left 0 --capture-top 0 --capture-width 1280 --capture-height 720
+```
+
+Use `--allow-attach-reset` only for smoke tests, not real learning runs.
 
 Fast cursor lane only:
 
