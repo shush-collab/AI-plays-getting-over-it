@@ -69,6 +69,7 @@ What is working now:
 - `src/aiget/benchmark_observation.py` reports fast/rich rates plus active work, wall time, sleep time, and missed deadlines.
 - `src/aiget/check_env.py` runs SB3 `check_env` plus a short random-action smoke validation.
 - `src/aiget/random_rollout.py` runs random-action smoke rollouts and writes CSV metrics.
+- `src/aiget/test_reset.py` verifies relaunch/save-restore reset and saves reset frames.
 - `src/aiget/train_sac.py` is a guarded SB3 `MultiInputPolicy` training entrypoint.
 - The training hot path uses fixed-address raw reads, preallocated numpy arrays, and no JSON serialization.
 - The image lane and rich lane update in background threads; `env.step()` consumes the latest snapshots without waiting for fresh ones.
@@ -197,6 +198,16 @@ Random rollout smoke test:
 python -m aiget.random_rollout --seconds 60 --csv runs/random_rollout.csv
 ```
 
+Relaunch/save-restore reset proof:
+
+```bash
+python -m aiget.test_reset \
+  --resets 5 \
+  --clean-save-path "$HOME/goi_reset_saves/start_clean" \
+  --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
+  --capture-left 2560 --capture-top 639 --capture-width 1920 --capture-height 1080
+```
+
 Guarded SAC/PPO training entrypoint:
 
 ```bash
@@ -296,6 +307,7 @@ aiget-observation-state --format json
 aiget-benchmark-observation --seconds 10
 aiget-check-env --allow-attach-reset --steps 100
 aiget-random-rollout --seconds 60
+aiget-test-reset --resets 5
 aiget-train-sac --algo sac --steps 10000
 aiget-ptrace-il2cpp
 ```

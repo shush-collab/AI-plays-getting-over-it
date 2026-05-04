@@ -202,7 +202,7 @@ class GettingOverItEnv(gym.Env):
         super().reset(seed=seed)
         self.close()
         self.pid = self._reset_game_process()
-        self._layout = self._load_or_resolve_layout(self.pid)
+        self._layout = self._load_or_resolve_layout_after_reset(self.pid)
         self._fast_addr = self._layout.fast_cursor_addr
         self._mem_fd = os.open(f"/proc/{self.pid}/mem", os.O_RDONLY)
         self._previous_cursor = None
@@ -411,10 +411,21 @@ class GettingOverItEnv(gym.Env):
         deadline = time.monotonic() + self.game_ready_timeout
         while time.monotonic() < deadline:
             try:
-                return auto_pid()
+                pid = auto_pid()
             except RuntimeError:
                 time.sleep(0.5)
+                continue
+            if self._game_process_ready(pid):
+                return pid
+            time.sleep(0.5)
         raise RuntimeError("GettingOverIt.x86_64 did not appear after launch_command") from None
+
+    def _game_process_ready(self, pid: int) -> bool:
+        try:
+            maps = Path(f"/proc/{pid}/maps").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        return "GameAssembly.so" in maps and "UnityPlayer.so" in maps
 
     def _kill_existing_game(self) -> None:
         while True:
@@ -499,6 +510,21 @@ class GettingOverItEnv(gym.Env):
         if cache_path:
             save_live_layout(cache_path, layout)
         return layout
+
+    def _load_or_resolve_layout_after_reset(self, pid: int) -> ResolvedLiveLayout:
+        if self.reset_backend != RESET_RELAUNCH:
+            return self._load_or_resolve_layout(pid)
+
+        deadline = time.monotonic() + self.game_ready_timeout
+        last_exc: Exception | None = None
+        while time.monotonic() < deadline:
+            try:
+                return self._load_or_resolve_layout(pid)
+            except Exception as exc:
+                last_exc = exc
+                log(f"Relaunch layout discovery not ready yet; retrying: {exc}")
+                time.sleep(1.0)
+        raise RuntimeError("layout discovery did not become ready after relaunch") from last_exc
 
     def _start_rich_thread(self) -> None:
         self._rich_thread = Thread(

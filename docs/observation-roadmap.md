@@ -53,6 +53,7 @@ Move from scattered live reads toward one controlled observation pipeline:
 - [x] Add boring progress-shaped v1 reward.
 - [x] Add guarded SAC/PPO training entrypoint.
 - [x] Add relaunch/save-restore reset backend scaffolding.
+- [x] Add reset proof command that saves reset frames.
 - [x] Add strict image checks and reward-variance preflight guards.
 - [ ] Verify real reset/checkpoint restore before real training.
 - [ ] Tune v1 reward against real gameplay after reset is reliable.
