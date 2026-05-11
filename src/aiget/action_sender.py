@@ -9,13 +9,16 @@ from dataclasses import dataclass
 from typing import Protocol
 
 EV_SYN = 0x00
+EV_KEY = 0x01
 EV_REL = 0x02
 REL_X = 0x00
 REL_Y = 0x01
 SYN_REPORT = 0x00
+BTN_LEFT = 0x110
 BUS_USB = 0x03
 
 UI_SET_EVBIT = 0x40045564
+UI_SET_KEYBIT = 0x40045565
 UI_SET_RELBIT = 0x40045566
 UI_DEV_CREATE = 0x5501
 UI_DEV_DESTROY = 0x5502
@@ -51,8 +54,10 @@ class UInputMouseSender:
 
     def _create_device(self) -> None:
         fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_REL)
+        fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_KEY)
         fcntl.ioctl(self.fd, UI_SET_RELBIT, REL_X)
         fcntl.ioctl(self.fd, UI_SET_RELBIT, REL_Y)
+        fcntl.ioctl(self.fd, UI_SET_KEYBIT, BTN_LEFT)
 
         name = b"aiget-rl-mouse"
         payload = struct.pack(

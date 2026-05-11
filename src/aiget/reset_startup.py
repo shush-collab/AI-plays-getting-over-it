@@ -185,17 +185,11 @@ class StartupAutomation:
         return None
 
     def _probe_until(self, deadline: float) -> Any | None:
-        last_exc: Exception | None = None
         while time.monotonic() < deadline:
             try:
                 return self.resolve_layout()
-            except Exception as exc:
-                last_exc = exc
+            except Exception:
                 time.sleep(self.probe_interval)
-        if last_exc is not None:
-            raise_last_reason = _stage_from_exception(last_exc)
-            if raise_last_reason == "FAST_CURSOR_TIMEOUT":
-                raise RuntimeError(raise_last_reason) from last_exc
         return None
 
 

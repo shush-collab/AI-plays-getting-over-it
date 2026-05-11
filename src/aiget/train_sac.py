@@ -56,6 +56,14 @@ def main() -> None:
     )
     parser.add_argument("--clean-save-path", type=str, default=None, help="Known clean save path.")
     parser.add_argument("--active-save-path", type=str, default=None, help="Runtime save path.")
+    parser.add_argument("--game-ready-timeout", type=float, default=45.0)
+    parser.add_argument("--startup-mode", choices=("legacy", "auto"), default="auto")
+    parser.add_argument("--title-click", nargs=2, type=int, default=(1275, 305))
+    parser.add_argument("--confirm-click", nargs=2, type=int, default=(1275, 305))
+    parser.add_argument("--window-left", type=int, default=320)
+    parser.add_argument("--window-top", type=int, default=178)
+    parser.add_argument("--window-width", type=int, default=1920)
+    parser.add_argument("--window-height", type=int, default=1080)
     parser.add_argument(
         "--preflight-steps",
         type=int,
@@ -73,6 +81,20 @@ def main() -> None:
         action="store_true",
         help="Send policy actions through uinput.",
     )
+    parser.add_argument(
+        "--memory-window",
+        type=lambda value: int(value, 0),
+        default=0x400,
+        help="Raw memory search window for resolving reward progress fields.",
+    )
+    parser.add_argument(
+        "--layout-discovery-timeout",
+        type=float,
+        default=5.0,
+        help="Seconds allowed for resolving reward progress memory fields.",
+    )
+    parser.add_argument("--max-dx", type=int, default=200, help="Maximum mouse dx per env frame.")
+    parser.add_argument("--max-dy", type=int, default=200, help="Maximum mouse dy per env frame.")
     add_capture_region_args(parser)
     args = parser.parse_args()
 
@@ -107,7 +129,20 @@ def main() -> None:
         launch_command=args.launch_command,
         clean_save_path=args.clean_save_path,
         active_save_path=args.active_save_path,
+        game_ready_timeout=args.game_ready_timeout,
+        startup_mode=args.startup_mode,
+        startup_title_click=tuple(args.title_click),
+        startup_confirm_click=tuple(args.confirm_click),
+        window_left=args.window_left,
+        window_top=args.window_top,
+        window_width=args.window_width,
+        window_height=args.window_height,
         enable_uinput=args.send_actions,
+        discover_rich_layout=True,
+        window=args.memory_window,
+        layout_discovery_timeout=args.layout_discovery_timeout,
+        max_dx=args.max_dx,
+        max_dy=args.max_dy,
     )
     if args.preflight_steps > 0:
         _run_reward_preflight(env, args.preflight_steps, args.min_reward_std)
@@ -130,19 +165,41 @@ def main() -> None:
 
 def _run_reward_preflight(env: GettingOverItEnv, steps: int, min_reward_std: float) -> None:
     rewards: list[float] = []
+    valid_count = 0
+    source_counts: dict[str, int] = {}
+
     env.reset()
+
     for _ in range(steps):
-        _, reward, terminated, truncated, _ = env.step(env.action_space.sample())
+        _, reward, terminated, truncated, info = env.step(env.action_space.sample())
         rewards.append(float(reward))
+
+        rd = info.get("reward_debug", {})
+        if rd.get("progress_valid", False):
+            valid_count += 1
+
+        source = str(rd.get("progress_source", "missing"))
+        source_counts[source] = source_counts.get(source, 0) + 1
+
         if terminated or truncated:
             env.reset()
+
     reward_std = float(np.asarray(rewards, dtype=np.float32).std()) if rewards else 0.0
+    valid_ratio = valid_count / max(1, len(rewards))
+
     print(f"preflight_reward_std: {reward_std:.9f}")
+    print(f"preflight_progress_valid_ratio: {valid_ratio:.3f}")
+    print(f"preflight_progress_sources: {source_counts}")
+
     if reward_std <= min_reward_std:
-        raise SystemExit(
-            "Refusing to train: reward_std is too low. "
-            "Body/progress reward is unavailable or constant."
-        )
+        raise SystemExit("Refusing to train: reward_std is too low.")
+
+    if valid_ratio < 0.8:
+        raise SystemExit("Refusing to train: progress signal is invalid too often.")
+
+    if source_counts.get("invalid", 0) > len(rewards) * 0.2:
+        raise SystemExit("Refusing to train: too many invalid progress samples.")
+
     env.reset()
 
 

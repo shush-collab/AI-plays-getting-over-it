@@ -30,8 +30,11 @@ AIget/
 │       ├── observation_vector.py
 │       ├── observation_schema.py
 │       ├── observation_state.py
+│       ├── progress_signal.py
 │       ├── ptrace_il2cpp.py
 │       ├── random_rollout.py
+│       ├── reward.py
+│       ├── debug_reward_signal.py
 │       └── train_sac.py
 ├── tests/
 │   └── README.md
@@ -68,7 +71,10 @@ What is working now:
   - a slower raw rich-state lane for body, hammer tip/direction, and progress
 - `src/aiget/benchmark_observation.py` reports fast/rich rates plus active work, wall time, sleep time, and missed deadlines.
 - `src/aiget/check_env.py` runs SB3 `check_env` plus a short random-action smoke validation.
-- `src/aiget/random_rollout.py` runs random-action smoke rollouts and writes CSV metrics.
+- `src/aiget/progress_signal.py` converts memory/image observations into one scalar `progress_y`.
+- `src/aiget/reward.py` implements the current height-progress reward with debug output.
+- `src/aiget/debug_reward_signal.py` runs a live reward preflight and refuses dead/invalid rewards.
+- `src/aiget/random_rollout.py` runs random-action smoke rollouts and writes CSV metrics, including reward/progress debug fields.
 - `src/aiget/test_reset.py` verifies relaunch/save-restore reset and saves full reset traces.
 - `src/aiget/collect_reset_screens.py` collects full-size reset screenshots for menu mapping.
 - `src/aiget/annotate_reset_screen.py` overlays a coordinate grid on saved reset screenshots.
@@ -83,14 +89,24 @@ What is working now:
 - The environment reuses the latest rich snapshot without blocking on fresh background updates.
 - The current observation architecture roadmap lives in `docs/observation-roadmap.md`.
 - The measured relaunch reset path is deterministic on the current setup and enters gameplay before layout discovery.
+- Every `env.step()` exposes reward diagnostics in `info`:
+  - `progress_y`
+  - `progress_valid`
+  - `progress_source`
+  - `reward_debug`
+- Training preflight rejects runs with zero/near-zero reward variance or too many invalid progress samples.
 
 The current validated raw-memory path is:
 - `fakeCursorRB_native + 0xA8`
 
+The current reward signal is intentionally simple: height progress. It prefers
+memory `body_y`, falls back to memory `progress_y`, and marks progress invalid
+if neither signal is available. Vision/template progress is reserved as a
+fallback path and is not required on the current setup.
+
 What is still not solved:
 
 - Some rich fields still cannot be resolved to raw memory and are emitted as zero/default values with `rich_state_valid_mask` set to `false`.
-- The default reset is attach-only for smoke tests. A relaunch/save-restore backend exists for real training, but it needs configured game launch and save paths.
 - The eventual in-game exported observation blob does not exist yet.
 - Real training also refuses missing capture regions, blank/stale images, and constant reward preflight.
 
@@ -198,7 +214,42 @@ python -m aiget.check_env --allow-attach-reset --steps 100
 Random rollout smoke test:
 
 ```bash
-python -m aiget.random_rollout --seconds 60 --csv runs/random_rollout.csv
+python -m aiget.random_rollout \
+  --seconds 60 \
+  --discover-rich-layout \
+  --capture-left 320 \
+  --capture-top 178 \
+  --capture-width 1920 \
+  --capture-height 1080 \
+  --csv runs/random_rollout.csv
+```
+
+Reward signal debugger:
+
+```bash
+python -m aiget.debug_reward_signal \
+  --seconds 120 \
+  --send-actions \
+  --capture-left 320 \
+  --capture-top 178 \
+  --capture-width 1920 \
+  --capture-height 1080 \
+  --csv runs/reward_signal.csv
+```
+
+The reward debugger requires:
+
+- `progress_valid_ratio >= 0.8`
+- `reward_std > 0.0001`
+- progress source mostly `memory_body` or `memory_progress`
+- reward reason mostly `height_progress`
+
+On the current local setup, the 120 second reward debugger passed with:
+
+```text
+rows: 478
+reward_std: 0.689954758
+progress_valid_ratio: 1.000
 ```
 
 Relaunch/save-restore reset proof:
@@ -209,13 +260,16 @@ python -m aiget.test_reset \
   --clean-save-path "$HOME/goi_reset_saves/start_clean" \
   --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
   --startup-mode auto \
-  --capture-left 2560 --capture-top 639 --capture-width 1920 --capture-height 1080
+  --title-click 1275 305 \
+  --confirm-click 1275 305 \
+  --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
+  --capture-left 320 --capture-top 178 --capture-width 1920 --capture-height 1080
 ```
 
 The measured geometry used for the working reset path is:
 
 - window and capture: `320,178,1920,1080`
-- title/menu click: `1290,305`
+- title/menu click: `1275,305`
 
 You can also collect full-size menu screenshots and annotate them before
 tweaking reset coordinates:
@@ -245,10 +299,17 @@ python -m aiget.train_sac \
   --algo sac \
   --steps 10000 \
   --reset-backend relaunch \
-  --clean-save-path /path/to/clean-save \
-  --active-save-path /path/to/runtime-save \
-  --launch-command /path/to/GettingOverIt.x86_64 \
-  --capture-left 0 --capture-top 0 --capture-width 1280 --capture-height 720
+  --send-actions \
+  --preflight-steps 300 \
+  --min-reward-std 0.0001 \
+  --clean-save-path "$HOME/goi_reset_saves/start_clean" \
+  --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
+  --startup-mode auto \
+  --title-click 1275 305 \
+  --confirm-click 1275 305 \
+  --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
+  --launch-command steam -applaunch 240720 \
+  --capture-left 320 --capture-top 178 --capture-width 1920 --capture-height 1080
 ```
 
 Use `--allow-attach-reset` only for smoke tests, not real learning runs.
@@ -329,6 +390,8 @@ aiget-observation-state --format json
 aiget-benchmark-observation --seconds 10
 aiget-check-env --allow-attach-reset --steps 100
 aiget-random-rollout --seconds 60
+aiget-debug-reward-signal --seconds 120 --send-actions \
+  --capture-left 320 --capture-top 178 --capture-width 1920 --capture-height 1080
 aiget-test-reset --resets 5
 aiget-train-sac --algo sac --steps 10000
 aiget-ptrace-il2cpp
@@ -343,6 +406,26 @@ python3 -m unittest discover -s tests -v
 python3 -m compileall src *.py
 ```
 
+Live checks that require the native Linux game process:
+
+```bash
+python -m aiget.test_reset \
+  --resets 1 \
+  --clean-save-path "$HOME/goi_reset_saves/start_clean" \
+  --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
+  --startup-mode auto \
+  --title-click 1275 305 \
+  --confirm-click 1275 305 \
+  --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
+  --capture-left 320 --capture-top 178 --capture-width 1920 --capture-height 1080
+
+python -m aiget.debug_reward_signal \
+  --seconds 120 \
+  --send-actions \
+  --capture-left 320 --capture-top 178 --capture-width 1920 --capture-height 1080 \
+  --csv runs/reward_signal.csv
+```
+
 ## Todo
 
 Observation architecture progress is tracked in `docs/observation-roadmap.md`.
@@ -352,6 +435,7 @@ Remaining project backlog:
 - [x] Wire v1 control inputs through Linux uinput.
 - [x] Build the first unified observation + action environment API.
 - [x] Add image observation, action repeat, benchmark timing, and smoke rollout tools.
-- [ ] Implement reliable game reset/checkpoint restore.
-- [ ] Start real training only after reset works.
+- [x] Add a debuggable height-progress reward signal and reward preflight.
+- [x] Implement relaunch/save-restore reset for the current local setup.
+- [ ] Run the first guarded tiny training job after reward preflight passes in the same session.
 - [ ] Replace external rich reads with an in-game BepInEx IL2CPP plugin writing one shared-memory observation blob.

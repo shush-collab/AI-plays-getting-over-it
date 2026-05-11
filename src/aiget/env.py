@@ -41,7 +41,9 @@ from .observation_vector import (
     RICH_VALUE_FIELDS,
     build_observation_vector,
 )
+from .progress_signal import ProgressEstimator
 from .reset_startup import StartupAutomation
+from .reward import HeightReward
 from .window_control import WindowControl
 
 RICH_INDEX = {name: index for index, name in enumerate(RICH_VALUE_FIELDS)}
@@ -214,16 +216,18 @@ class GettingOverItEnv(gym.Env):
         self._rich_accumulator = SlowLaneAccumulator(
             tracker=ProgressTracker(best_height=0.0, last_progress_ts=0.0)
         )
+        no_progress_limit_steps = max(1, int(round(self.no_progress_timeout / self.dt)))
+        self._progress_estimator = ProgressEstimator()
+        self._reward_fn = HeightReward(no_progress_limit_steps=no_progress_limit_steps)
+        self._last_reward_debug: dict[str, object] = {}
         self._step_count = 0
         self._episode_started_monotonic = 0.0
-        self._last_progress_monotonic = 0.0
         self._game_freeze_detected = False
         self._process_lost = False
         self._last_reset_mode = "not_reset"
         self._reset_started_perf = 0.0
         self._reset_trace: dict[str, object] = {}
         self._startup_frames: list[tuple[str, np.ndarray]] = []
-        self._last_progress_y = 0.0
         self._last_best_progress_y = 0.0
         self._action_sender: ActionSender | None = None
         self._frame_capture: FrameCapture | None = None
@@ -289,8 +293,16 @@ class GettingOverItEnv(gym.Env):
             self._wait_for_valid_image()
             self._reset_trace["gameplay_image_ready_ms"] = self._reset_elapsed_ms()
         obs = self.read_observation()
-        self._last_progress_y = float(obs[STATE_OBS_KEY][12])
         self._last_best_progress_y = float(obs[STATE_OBS_KEY][13])
+        state = obs[STATE_OBS_KEY]
+        image = obs[IMAGE_OBS_KEY]
+        initial_progress = self._progress_estimator.estimate(state, image)
+        self._reward_fn.reset(initial_progress)
+        self._last_reward_debug = {
+            "initial_progress_y": initial_progress.y,
+            "initial_progress_valid": initial_progress.valid,
+            "initial_progress_source": initial_progress.source.value,
+        }
         self._reset_trace["failure_stage"] = ""
         return self._maybe_copy(obs), self._info()
 
@@ -314,11 +326,11 @@ class GettingOverItEnv(gym.Env):
         )
         self._step_count = 0
         self._episode_started_monotonic = time.monotonic()
-        self._last_progress_monotonic = self._episode_started_monotonic
         self._game_freeze_detected = False
         self._process_lost = False
-        self._last_progress_y = 0.0
         self._last_best_progress_y = 0.0
+        self._reward_fn.reset()
+        self._last_reward_debug = {}
         self._next_deadline = time.perf_counter()
         self.last_step_timing = {
             "active_step_ms": 0.0,
@@ -375,7 +387,7 @@ class GettingOverItEnv(gym.Env):
                         (float(action_array[0]), float(action_array[1]))
                     )
                 obs = self.read_observation()
-                reward, terminated, truncated = self._compute_reward_and_done(obs[STATE_OBS_KEY])
+                reward, terminated, truncated = self._compute_reward_and_done(obs)
             except ProcessLookupError:
                 reward = 0.0
                 terminated = True
@@ -592,7 +604,9 @@ class GettingOverItEnv(gym.Env):
             except FileNotFoundError:
                 pass
             else:
-                if cached_layout.pid == pid:
+                if cached_layout.pid == pid and (
+                    not self.discover_rich_layout or _layout_has_progress_fields(cached_layout)
+                ):
                     return cached_layout
 
         fast_lane = freeze_fast_cursor_lane(
@@ -613,7 +627,7 @@ class GettingOverItEnv(gym.Env):
                     window=self.window,
                     eps=self.eps,
                     startup_timeout=self.layout_discovery_timeout,
-                    resolve_optional_fields=True,
+                    resolve_optional_fields=False,
                     fast_cursor_addr=fast_lane.current_addr,
                 )
             except Exception as exc:
@@ -984,36 +998,26 @@ class GettingOverItEnv(gym.Env):
         mask[RICH_INDEX["time_since_progress"]] = progress_valid
         return values, mask
 
-    def _compute_reward_and_done(self, obs: np.ndarray) -> tuple[float, bool, bool]:
-        progress_y = float(obs[12])
-        body_y = float(obs[5])
-        body_valid = bool(obs[22])
-        progress_valid = bool(obs[29])
-        now = time.monotonic()
-        if not progress_valid and not body_valid:
-            return -0.001, False, self._time_limit_reached(now)
+    def _compute_reward_and_done(self, obs_dict: dict[str, np.ndarray]) -> tuple[float, bool, bool]:
+        state = obs_dict[STATE_OBS_KEY]
+        image = obs_dict[IMAGE_OBS_KEY]
 
-        current_y = body_y if body_valid else progress_y
-        delta_y = current_y - self._last_progress_y
-        delta_best = max(0.0, current_y - self._last_best_progress_y)
-        fall_penalty = 1.0 if current_y < self._last_best_progress_y - 5.0 else 0.0
-        reward = 2.0 * delta_best + 0.1 * delta_y - 0.001 - fall_penalty
+        progress = self._progress_estimator.estimate(state, image)
 
-        if delta_best > 0.0:
-            self._last_progress_monotonic = now
-        self._last_progress_y = current_y
-        self._last_best_progress_y = max(self._last_best_progress_y, current_y)
-        truncated = self._time_limit_reached(now) or self._stalled(now) or bool(fall_penalty)
-        return float(reward), False, truncated
+        out = self._reward_fn.compute(
+            progress=progress,
+            time_limit_reached=self._time_limit_reached(time.monotonic()),
+        )
+
+        self._last_reward_debug = out.debug
+        return out.reward, out.terminated, out.truncated
 
     def _time_limit_reached(self, now: float) -> bool:
         return now - self._episode_started_monotonic >= self.max_episode_seconds
 
-    def _stalled(self, now: float) -> bool:
-        return now - self._last_progress_monotonic >= self.no_progress_timeout
-
     def _info(self) -> dict[str, object]:
         rich_age = 0.0 if self._rich_ts <= 0.0 else max(0.0, time.time() - self._rich_ts)
+        reward_debug = dict(self._last_reward_debug)
         return {
             "pid": self.pid,
             "fast_addr": hex(self._fast_addr),
@@ -1031,6 +1035,16 @@ class GettingOverItEnv(gym.Env):
             "step_timing": dict(self.last_step_timing),
             "reset_mode": self._last_reset_mode,
             "reset_trace": dict(self._reset_trace),
+            "progress_y": reward_debug.get(
+                "progress_y", reward_debug.get("initial_progress_y", 0.0)
+            ),
+            "progress_valid": reward_debug.get(
+                "progress_valid", reward_debug.get("initial_progress_valid", False)
+            ),
+            "progress_source": reward_debug.get(
+                "progress_source", reward_debug.get("initial_progress_source", "invalid")
+            ),
+            "reward_debug": reward_debug,
         }
 
     def _debug_payload(self, obs: np.ndarray, reward: float) -> dict[str, object]:
@@ -1049,3 +1063,12 @@ class GettingOverItEnv(gym.Env):
         if isinstance(obs, dict):
             return {key: value.copy() for key, value in obs.items()}
         return obs.copy()
+
+
+def _layout_has_progress_fields(layout: ResolvedLiveLayout) -> bool:
+    return bool(
+        layout.body_position_addr is not None
+        and layout.progress_addr is not None
+        and layout.valid_mask.get("body_position_xy")
+        and layout.valid_mask.get("progress_features")
+    )

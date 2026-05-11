@@ -42,6 +42,25 @@ def main() -> None:
         help="Fail if image capture is blank, stale, or unavailable.",
     )
     parser.add_argument(
+        "--discover-rich-layout",
+        action="store_true",
+        help="Resolve rich memory fields so reward progress debug can use body/progress masks.",
+    )
+    parser.add_argument(
+        "--memory-window",
+        type=lambda value: int(value, 0),
+        default=0x400,
+        help="Raw memory search window used when --discover-rich-layout is enabled.",
+    )
+    parser.add_argument(
+        "--layout-discovery-timeout",
+        type=float,
+        default=5.0,
+        help="Seconds allowed for rich layout discovery when enabled.",
+    )
+    parser.add_argument("--max-dx", type=int, default=40, help="Maximum mouse dx per env frame.")
+    parser.add_argument("--max-dy", type=int, default=40, help="Maximum mouse dy per env frame.")
+    parser.add_argument(
         "--csv",
         type=str,
         default="runs/random_rollout.csv",
@@ -58,6 +77,11 @@ def main() -> None:
         strict_image=args.strict_image,
         capture_region=capture_region_from_args(args),
         enable_uinput=args.send_actions,
+        discover_rich_layout=args.discover_rich_layout,
+        window=args.memory_window,
+        layout_discovery_timeout=args.layout_discovery_timeout,
+        max_dx=args.max_dx,
+        max_dy=args.max_dy,
     )
     rows: list[dict[str, object]] = []
     try:
@@ -71,33 +95,47 @@ def main() -> None:
             obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
             state = obs[STATE_OBS_KEY]
             image = obs[IMAGE_OBS_KEY]
+            reward_debug = info.get("reward_debug", {})
             reward_total += float(reward)
             steps += 1
-            rows.append(
+            row = {
+                "t": time.perf_counter() - started,
+                "step": steps,
+                "reward": float(reward),
+                "reward_total": reward_total,
+                "cursor_x": float(state[0]),
+                "cursor_y": float(state[1]),
+                "body_y": float(state[5]),
+                "progress_y": float(state[12]),
+                "best_y": float(state[13]),
+                "terminated": terminated,
+                "truncated": truncated,
+                "rich_state_age": info["rich_state_age"],
+                "image_mean": float(image.mean()),
+                "image_std": float(image.std()),
+                "image_min": int(image.min()),
+                "image_max": int(image.max()),
+                "image_age": info["image_age"],
+                "image_updates": info["image_updates"],
+                "active_step_ms": info["step_timing"]["active_step_ms"],
+                "wall_step_ms": info["step_timing"]["wall_step_ms"],
+                "process_lost": info["process_lost"],
+            }
+            row.update(
                 {
-                    "t": time.perf_counter() - started,
-                    "step": steps,
-                    "reward": float(reward),
-                    "reward_total": reward_total,
-                    "cursor_x": float(state[0]),
-                    "cursor_y": float(state[1]),
-                    "body_y": float(state[5]),
-                    "progress_y": float(state[12]),
-                    "best_y": float(state[13]),
-                    "terminated": terminated,
-                    "truncated": truncated,
-                    "rich_state_age": info["rich_state_age"],
-                    "image_mean": float(image.mean()),
-                    "image_std": float(image.std()),
-                    "image_min": int(image.min()),
-                    "image_max": int(image.max()),
-                    "image_age": info["image_age"],
-                    "image_updates": info["image_updates"],
-                    "active_step_ms": info["step_timing"]["active_step_ms"],
-                    "wall_step_ms": info["step_timing"]["wall_step_ms"],
-                    "process_lost": info["process_lost"],
+                    "progress_valid": reward_debug.get("progress_valid", False),
+                    "progress_source": reward_debug.get("progress_source", "missing"),
+                    "progress_y_reward": reward_debug.get("progress_y", 0.0),
+                    "reward_delta_y": reward_debug.get("delta_y", 0.0),
+                    "reward_delta_best": reward_debug.get("delta_best", 0.0),
+                    "reward_best_y": reward_debug.get("best_y", 0.0),
+                    "reward_fall": reward_debug.get("fall", False),
+                    "reward_reason": reward_debug.get("reward_reason", "missing"),
+                    "invalid_steps": reward_debug.get("invalid_steps", 0),
+                    "steps_since_progress": reward_debug.get("steps_since_progress", 0),
                 }
             )
+            rows.append(row)
             if terminated or truncated:
                 break
         elapsed = max(1e-9, time.perf_counter() - started)
