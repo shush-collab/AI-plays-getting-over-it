@@ -69,7 +69,9 @@ What is working now:
 - `src/aiget/benchmark_observation.py` reports fast/rich rates plus active work, wall time, sleep time, and missed deadlines.
 - `src/aiget/check_env.py` runs SB3 `check_env` plus a short random-action smoke validation.
 - `src/aiget/random_rollout.py` runs random-action smoke rollouts and writes CSV metrics.
-- `src/aiget/test_reset.py` verifies relaunch/save-restore reset and saves reset frames.
+- `src/aiget/test_reset.py` verifies relaunch/save-restore reset and saves full reset traces.
+- `src/aiget/collect_reset_screens.py` collects full-size reset screenshots for menu mapping.
+- `src/aiget/annotate_reset_screen.py` overlays a coordinate grid on saved reset screenshots.
 - `src/aiget/train_sac.py` is a guarded SB3 `MultiInputPolicy` training entrypoint.
 - The training hot path uses fixed-address raw reads, preallocated numpy arrays, and no JSON serialization.
 - The image lane and rich lane update in background threads; `env.step()` consumes the latest snapshots without waiting for fresh ones.
@@ -80,6 +82,7 @@ What is working now:
 - Runtime play does not call ptrace, Unity, or IL2CPP functions.
 - The environment reuses the latest rich snapshot without blocking on fresh background updates.
 - The current observation architecture roadmap lives in `docs/observation-roadmap.md`.
+- The measured relaunch reset path is deterministic on the current setup and enters gameplay before layout discovery.
 
 The current validated raw-memory path is:
 - `fakeCursorRB_native + 0xA8`
@@ -205,7 +208,26 @@ python -m aiget.test_reset \
   --resets 5 \
   --clean-save-path "$HOME/goi_reset_saves/start_clean" \
   --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
+  --startup-mode auto \
   --capture-left 2560 --capture-top 639 --capture-width 1920 --capture-height 1080
+```
+
+The measured geometry used for the working reset path is:
+
+- window and capture: `320,178,1920,1080`
+- title/menu click: `1290,305`
+
+You can also collect full-size menu screenshots and annotate them before
+tweaking reset coordinates:
+
+```bash
+python -m aiget.collect_reset_screens \
+  --clean-save-path "$HOME/goi_reset_saves/start_clean" \
+  --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
+  --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
+  --capture-left 320 --capture-top 178 --capture-width 1920 --capture-height 1080
+
+python -m aiget.annotate_reset_screen runs/reset_screens/<run>/frame_059.png
 ```
 
 Guarded SAC/PPO training entrypoint:

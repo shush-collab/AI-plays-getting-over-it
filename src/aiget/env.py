@@ -41,6 +41,8 @@ from .observation_vector import (
     RICH_VALUE_FIELDS,
     build_observation_vector,
 )
+from .reset_startup import StartupAutomation
+from .window_control import WindowControl
 
 RICH_INDEX = {name: index for index, name in enumerate(RICH_VALUE_FIELDS)}
 STATE_OBS_KEY = "state"
@@ -116,6 +118,15 @@ class GettingOverItEnv(gym.Env):
         startup_key: str | None = None,
         startup_delay: float = 0.0,
         startup_attempts: int = 0,
+        startup_mode: str = "legacy",
+        startup_reference_dir: str | None = None,
+        startup_title_click: tuple[int, int] = (850, 210),
+        startup_confirm_click: tuple[int, int] = (640, 430),
+        window_title: str = "Getting Over It",
+        window_left: int | None = None,
+        window_top: int | None = None,
+        window_width: int | None = None,
+        window_height: int | None = None,
         copy_observation: bool = True,
         debug_json: bool = False,
         debug_every_n: int = 30,
@@ -160,6 +171,17 @@ class GettingOverItEnv(gym.Env):
         self.startup_key = startup_key
         self.startup_delay = startup_delay
         self.startup_attempts = max(0, int(startup_attempts))
+        if startup_mode not in ("legacy", "auto"):
+            raise ValueError(f"startup_mode must be 'legacy' or 'auto', got {startup_mode!r}")
+        self.startup_mode = startup_mode
+        self.startup_reference_dir = startup_reference_dir
+        self.startup_title_click = startup_title_click
+        self.startup_confirm_click = startup_confirm_click
+        self.window_title = window_title
+        self.window_left = window_left
+        self.window_top = window_top
+        self.window_width = window_width
+        self.window_height = window_height
         self.copy_observation = copy_observation
         self.debug_json = debug_json
         self.debug_every_n = max(1, debug_every_n)
@@ -200,6 +222,7 @@ class GettingOverItEnv(gym.Env):
         self._last_reset_mode = "not_reset"
         self._reset_started_perf = 0.0
         self._reset_trace: dict[str, object] = {}
+        self._startup_frames: list[tuple[str, np.ndarray]] = []
         self._last_progress_y = 0.0
         self._last_best_progress_y = 0.0
         self._action_sender: ActionSender | None = None
@@ -222,6 +245,7 @@ class GettingOverItEnv(gym.Env):
             "startup_actions_sent": 0,
             "old_pid": self.pid,
         }
+        self._startup_frames = []
         try:
             return self._reset_impl()
         except Exception as exc:
@@ -235,22 +259,35 @@ class GettingOverItEnv(gym.Env):
 
     def _reset_impl(self):
         self.close()
-        self._reset_trace["failure_stage"] = "process_ready"
+        self._reset_trace["failure_stage"] = "PROCESS_TIMEOUT"
         self.pid = self._reset_game_process()
         self._reset_trace["new_pid"] = self.pid
         self._reset_runtime_state()
         self._open_action_sender()
+        if self._auto_startup_enabled():
+            self._reset_trace["failure_stage"] = "WINDOW_NOT_FOUND"
+            self._prepare_startup_window()
         self._start_frame_capture()
+        if self._auto_startup_enabled():
+            self._append_startup_full_frame("initial_full")
         if self.enable_image and self.strict_image:
-            self._reset_trace["failure_stage"] = "image_ready"
+            self._reset_trace["failure_stage"] = "IMAGE_DARK_TIMEOUT"
             self._wait_for_valid_image()
-        self._reset_trace["failure_stage"] = "gameplay_ready"
-        self._layout = self._load_or_resolve_layout_after_reset(self.pid)
+        if self._auto_startup_enabled():
+            self._append_startup_full_frame("after_window_focus_full")
+        if self._auto_startup_enabled():
+            self._layout = self._drive_startup_until_playable(self.pid)
+        else:
+            self._reset_trace["failure_stage"] = "PLAYERCONTROL_TIMEOUT"
+            self._layout = self._load_or_resolve_layout_after_reset(self.pid)
         self._fast_addr = self._layout.fast_cursor_addr
         self._reset_trace["fast_cursor_addr"] = hex(self._fast_addr)
         self._mem_fd = os.open(f"/proc/{self.pid}/mem", os.O_RDONLY)
         self._read_rich_once()
         self._start_rich_thread()
+        if self.enable_image and self.strict_image:
+            self._wait_for_valid_image()
+            self._reset_trace["gameplay_image_ready_ms"] = self._reset_elapsed_ms()
         obs = self.read_observation()
         self._last_progress_y = float(obs[STATE_OBS_KEY][12])
         self._last_best_progress_y = float(obs[STATE_OBS_KEY][13])
@@ -290,6 +327,13 @@ class GettingOverItEnv(gym.Env):
             "missed_deadlines": 0,
         }
 
+    def _auto_startup_enabled(self) -> bool:
+        return self.reset_backend == RESET_RELAUNCH and self.startup_mode == "auto"
+
+    @property
+    def startup_frames(self) -> list[tuple[str, np.ndarray]]:
+        return [(label, frame.copy()) for label, frame in self._startup_frames]
+
     def _open_action_sender(self) -> None:
         self._action_sender = self._provided_action_sender or open_action_sender(
             enabled=self.enable_uinput,
@@ -304,6 +348,7 @@ class GettingOverItEnv(gym.Env):
                 output_shape=CAPTURE_FRAME_SHAPE,
                 region=self.capture_region,
                 allow_blank=not self.strict_image,
+                prefer_xwd=self._auto_startup_enabled(),
             )
             if self.enable_image
             else None
@@ -483,7 +528,7 @@ class GettingOverItEnv(gym.Env):
             if not process_seen:
                 self._reset_trace["process_ready_ms"] = self._reset_elapsed_ms()
                 process_seen = True
-            self._reset_trace["failure_stage"] = "modules_ready"
+            self._reset_trace["failure_stage"] = "MODULES_TIMEOUT"
             if self._game_process_ready(pid):
                 self._reset_trace["modules_ready_ms"] = self._reset_elapsed_ms()
                 return pid
@@ -589,6 +634,11 @@ class GettingOverItEnv(gym.Env):
         last_exc: Exception | None = None
         next_startup_action_at = time.monotonic() + max(0.0, self.startup_delay)
         while time.monotonic() < deadline:
+            refreshed_pid = self._refresh_reset_pid_if_needed(pid)
+            if refreshed_pid is None:
+                time.sleep(0.5)
+                continue
+            pid = refreshed_pid
             if (
                 self._startup_action_configured()
                 and int(self._reset_trace["startup_actions_sent"]) < self.startup_attempts
@@ -606,6 +656,120 @@ class GettingOverItEnv(gym.Env):
                 time.sleep(1.0)
         raise RuntimeError("layout discovery did not become ready after relaunch") from last_exc
 
+    def _prepare_startup_window(self) -> None:
+        deadline = time.monotonic() + self.game_ready_timeout
+        last_exc: Exception | None = None
+        while time.monotonic() < deadline:
+            control = WindowControl(title=self.window_title)
+            try:
+                control.move_resize(
+                    left=self.window_left,
+                    top=self.window_top,
+                    width=self.window_width,
+                    height=self.window_height,
+                )
+                geom = control.geometry()
+            except Exception as exc:
+                last_exc = exc
+                time.sleep(0.5)
+                continue
+            self._reset_trace["window_id"] = geom.window_id
+            self._reset_trace["window_left"] = geom.x
+            self._reset_trace["window_top"] = geom.y
+            self._reset_trace["window_width"] = geom.width
+            self._reset_trace["window_height"] = geom.height
+            self._reset_trace["window_ready_ms"] = self._reset_elapsed_ms()
+            return
+        raise RuntimeError(f"WINDOW_NOT_FOUND: {last_exc}") from last_exc
+
+    def _drive_startup_until_playable(self, pid: int) -> ResolvedLiveLayout:
+        self._reset_trace["failure_stage"] = "PLAYERCONTROL_TIMEOUT"
+        control = WindowControl(title=self.window_title)
+
+        def resolve_layout() -> ResolvedLiveLayout:
+            refreshed_pid = self._refresh_reset_pid_if_needed(pid)
+            if refreshed_pid is None:
+                raise RuntimeError("PROCESS_TIMEOUT")
+            return self._load_or_resolve_layout(refreshed_pid)
+
+        automation = StartupAutomation(
+            frame_getter=self._latest_image_frame,
+            full_frame_getter=self._capture_startup_full_frame,
+            window_control=control,
+            resolve_layout=resolve_layout,
+            timeout=self.game_ready_timeout,
+            reference_dir=self.startup_reference_dir,
+            action_interval=2.0,
+            max_actions=self.startup_attempts or 2,
+            title_click=self.startup_title_click,
+            confirm_click=self.startup_confirm_click,
+        )
+        result = automation.drive_until_playable()
+        startup_frames = list(self._startup_frames)
+        for event in result.events:
+            if event.action == "resolved":
+                startup_frames.append(("playable_full", event.frame.copy()))
+                continue
+            startup_frames.append((f"before_click_{event.index}_full", event.frame.copy()))
+            if event.after_frame is not None:
+                startup_frames.append((f"after_click_{event.index}_full", event.after_frame.copy()))
+        self._startup_frames = startup_frames
+        self._reset_trace["startup"] = result.as_trace()
+        self._reset_trace["startup_state"] = result.state.value
+        self._reset_trace["startup_actions_sent"] = result.attempts
+        self._reset_trace["startup_action_sent"] = result.attempts > 0
+        if not result.success or result.layout is None:
+            reason = result.reason or "MENU_UNKNOWN_TIMEOUT"
+            self._reset_trace["failure_stage"] = reason
+            self._append_startup_full_frame("failure_full")
+            raise RuntimeError(f"{reason}: startup did not reach playable scene")
+        self._reset_trace["playercontrol_ready_ms"] = self._reset_elapsed_ms()
+        return result.layout
+
+    def _latest_image_frame(self) -> np.ndarray:
+        with self._image_lock:
+            return self._image_latest.copy()
+
+    def _capture_startup_full_frame(self) -> np.ndarray:
+        if self.capture_region is not None:
+            region = self.capture_region
+            output_shape = (region.height, region.width, 1)
+        else:
+            output_shape = (self.window_height or 720, self.window_width or 1280, 1)
+            region = None
+        capture = FrameCapture(
+            output_shape=output_shape,
+            region=region,
+            allow_blank=False,
+            prefer_xwd=True,
+        )
+        try:
+            return capture.read_full_gray()
+        finally:
+            capture.close()
+
+    def _append_startup_full_frame(self, label: str) -> None:
+        try:
+            frame = self._capture_startup_full_frame()
+        except Exception as exc:
+            self._reset_trace[f"{label}_error"] = str(exc)
+            return
+        self._startup_frames.append((label, frame))
+
+    def _refresh_reset_pid_if_needed(self, pid: int) -> int | None:
+        if Path(f"/proc/{pid}/maps").exists():
+            return pid
+        try:
+            new_pid = auto_pid()
+        except RuntimeError:
+            return None
+        if not self._game_process_ready(new_pid):
+            return None
+        self.pid = new_pid
+        self._reset_trace["new_pid"] = new_pid
+        self._reset_trace["reacquired_pid"] = new_pid
+        return new_pid
+
     def _startup_action_configured(self) -> bool:
         return self.startup_attempts > 0 and (
             self.startup_click is not None or self.startup_key is not None
@@ -613,14 +777,31 @@ class GettingOverItEnv(gym.Env):
 
     def _send_startup_action(self) -> None:
         commands: list[list[str]] = []
+        window_info = self._game_window_info()
+        window_id = window_info.get("WINDOW") if window_info is not None else None
+        if window_id:
+            try:
+                subprocess.run(
+                    ["xdotool", "windowactivate", "--sync", window_id],
+                    check=False,
+                    timeout=2.0,
+                )
+            except Exception:
+                pass
         if self.startup_click is not None:
             x, y = self.startup_click
-            if self.capture_region is not None:
+            if window_info is not None and "X" in window_info and "Y" in window_info:
+                x += int(window_info["X"])
+                y += int(window_info["Y"])
+            elif self.capture_region is not None:
                 x += self.capture_region.left
                 y += self.capture_region.top
             commands.append(["xdotool", "mousemove", str(x), str(y), "click", "1"])
         if self.startup_key is not None:
-            commands.append(["xdotool", "key", self.startup_key])
+            if window_id:
+                commands.append(["xdotool", "key", "--window", window_id, self.startup_key])
+            else:
+                commands.append(["xdotool", "key", self.startup_key])
         for command in commands:
             try:
                 subprocess.run(command, check=True, timeout=3.0)
@@ -628,8 +809,34 @@ class GettingOverItEnv(gym.Env):
                 raise RuntimeError(f"startup action failed: {' '.join(command)}: {exc}") from exc
         self._reset_trace["startup_action_sent"] = True
         self._reset_trace["startup_actions_sent"] = (
-            int(self._reset_trace["startup_actions_sent"]) + 1
+            int(self._reset_trace.get("startup_actions_sent", 0)) + 1
         )
+
+    def _game_window_info(self) -> dict[str, str] | None:
+        try:
+            completed = subprocess.run(
+                [
+                    "xdotool",
+                    "search",
+                    "--onlyvisible",
+                    "--class",
+                    "GettingOverIt",
+                    "getwindowgeometry",
+                    "--shell",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+        except Exception:
+            return None
+        values: dict[str, str] = {}
+        for line in completed.stdout.splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                values[key] = value
+        return values or None
 
     def _reset_elapsed_ms(self) -> float:
         if self._reset_started_perf <= 0.0:

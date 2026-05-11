@@ -113,6 +113,15 @@ class _PlayerControlRefs:
 
 
 @dataclass(frozen=True)
+class _PlayerCursorRefs:
+    player_obj: int
+    fake_cursor_obj: int
+    fake_cursor_native: int
+    fake_cursor_rb_obj: int
+    fake_cursor_rb_native: int
+
+
+@dataclass(frozen=True)
 class _ObservationSnapshot:
     body_position_xy: tuple[float, float]
     body_angle: float
@@ -559,7 +568,10 @@ def _attach_runtime(pid: int) -> tuple[RemoteProcess, Il2CppRemote]:
         raise
 
 
-def _resolve_playercontrol_refs(runtime: Il2CppRemote, process: RemoteProcess) -> _PlayerControlRefs:
+def _resolve_playercontrol_cursor_refs(
+    runtime: Il2CppRemote,
+    process: RemoteProcess,
+) -> _PlayerCursorRefs:
     images = runtime.find_images()
 
     assembly_csharp = images.get("Assembly-CSharp.dll")
@@ -568,10 +580,9 @@ def _resolve_playercontrol_refs(runtime: Il2CppRemote, process: RemoteProcess) -
         raise RemoteError(f"Required images not found. Available: {', '.join(sorted(images))}")
 
     player_class = runtime.class_from_name(assembly_csharp, "", "PlayerControl")
-    pose_class = runtime.class_from_name(assembly_csharp, "", "PoseControl")
     object_class = runtime.class_from_name(unity_core, "UnityEngine", "Object")
-    if not player_class or not pose_class or not object_class:
-        raise RemoteError("PlayerControl, PoseControl, or UnityEngine.Object class not found")
+    if not player_class or not object_class:
+        raise RemoteError("PlayerControl or UnityEngine.Object class not found")
 
     player_type = runtime.call("il2cpp_class_get_type", [player_class])
     player_type_obj = runtime.call("il2cpp_type_get_object", [player_type])
@@ -585,6 +596,30 @@ def _resolve_playercontrol_refs(runtime: Il2CppRemote, process: RemoteProcess) -
 
     fake_cursor_obj = _require_object_field(runtime, player_class, player_obj, "fakeCursor", "PlayerControl")
     fake_cursor_rb_obj = _require_object_field(runtime, player_class, player_obj, "fakeCursorRB", "PlayerControl")
+
+    return _PlayerCursorRefs(
+        player_obj=player_obj,
+        fake_cursor_obj=fake_cursor_obj,
+        fake_cursor_native=process.read_ptr(fake_cursor_obj + 0x10),
+        fake_cursor_rb_obj=fake_cursor_rb_obj,
+        fake_cursor_rb_native=process.read_ptr(fake_cursor_rb_obj + 0x10),
+    )
+
+
+def _resolve_playercontrol_refs(runtime: Il2CppRemote, process: RemoteProcess) -> _PlayerControlRefs:
+    cursor_refs = _resolve_playercontrol_cursor_refs(runtime, process)
+    images = runtime.find_images()
+
+    assembly_csharp = images.get("Assembly-CSharp.dll")
+    if not assembly_csharp:
+        raise RemoteError(f"Assembly-CSharp.dll not found. Available: {', '.join(sorted(images))}")
+
+    player_class = runtime.class_from_name(assembly_csharp, "", "PlayerControl")
+    pose_class = runtime.class_from_name(assembly_csharp, "", "PoseControl")
+    if not player_class or not pose_class:
+        raise RemoteError("PlayerControl or PoseControl class not found")
+
+    player_obj = cursor_refs.player_obj
     pose_obj = _require_object_field(runtime, player_class, player_obj, "pose", "PlayerControl")
     hammer_collisions_obj = _require_object_field(runtime, player_class, player_obj, "hammerCollisions", "PlayerControl")
 
@@ -594,10 +629,10 @@ def _resolve_playercontrol_refs(runtime: Il2CppRemote, process: RemoteProcess) -
 
     return _PlayerControlRefs(
         player_obj=player_obj,
-        fake_cursor_obj=fake_cursor_obj,
-        fake_cursor_native=process.read_ptr(fake_cursor_obj + 0x10),
-        fake_cursor_rb_obj=fake_cursor_rb_obj,
-        fake_cursor_rb_native=process.read_ptr(fake_cursor_rb_obj + 0x10),
+        fake_cursor_obj=cursor_refs.fake_cursor_obj,
+        fake_cursor_native=cursor_refs.fake_cursor_native,
+        fake_cursor_rb_obj=cursor_refs.fake_cursor_rb_obj,
+        fake_cursor_rb_native=cursor_refs.fake_cursor_rb_native,
         body_transform_obj=body_transform_obj,
         body_transform_native=process.read_ptr(body_transform_obj + 0x10),
         hammer_anchor_transform_obj=hammer_anchor_transform_obj,
@@ -1048,7 +1083,7 @@ def sample_rigidbody_position(pid: int, rb_obj: int) -> tuple[float, float]:
 def find_playercontrol_position(pid: int) -> dict[str, int | float]:
     process, runtime = _attach_runtime(pid)
     try:
-        refs = _resolve_playercontrol_refs(runtime, process)
+        refs = _resolve_playercontrol_cursor_refs(runtime, process)
         pos_x, pos_y = runtime.get_position_via_icall(refs.fake_cursor_rb_obj)
 
         return {

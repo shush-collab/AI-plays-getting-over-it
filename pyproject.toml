@@ -32,6 +32,8 @@ aiget-benchmark-observation = "aiget.benchmark_observation:main"
 aiget-check-env = "aiget.check_env:main"
 aiget-random-rollout = "aiget.random_rollout:main"
 aiget-test-reset = "aiget.test_reset:main"
+aiget-collect-reset-screens = "aiget.collect_reset_screens:main"
+aiget-annotate-reset-screen = "aiget.annotate_reset_screen:main"
 aiget-train-sac = "aiget.train_sac:main"
 aiget-ptrace-il2cpp = "aiget.ptrace_il2cpp:main"
 

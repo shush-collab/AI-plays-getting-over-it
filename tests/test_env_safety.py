@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from subprocess import CompletedProcess
 from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +40,29 @@ class EnvSafetyTests(unittest.TestCase):
         finally:
             env._mem_fd = -1
             env.close()
+
+    def test_startup_click_uses_live_window_origin(self) -> None:
+        env = GettingOverItEnv(
+            enable_image=False,
+            enable_uinput=False,
+            startup_click=(10, 20),
+            startup_attempts=1,
+        )
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            if "getwindowgeometry" in command:
+                return CompletedProcess(command, 0, stdout="X=100\nY=200\n", stderr="")
+            return CompletedProcess(command, 0, stdout="", stderr="")
+
+        try:
+            with patch("aiget.env.subprocess.run", side_effect=fake_run):
+                env._send_startup_action()
+        finally:
+            env.close()
+
+        self.assertIn(["xdotool", "mousemove", "110", "220", "click", "1"], calls)
 
 
 if __name__ == "__main__":
