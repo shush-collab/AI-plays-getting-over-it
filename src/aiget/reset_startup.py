@@ -127,10 +127,14 @@ class StartupAutomation:
                 events=events,
             )
 
-        click_sequence = [
+        click_targets = [
             ("click_primary", self.title_click),
             ("click_fallback", self.confirm_click),
-        ][: self.max_actions]
+        ]
+        click_sequence = [
+            click_targets[index % len(click_targets)]
+            for index in range(max(0, self.max_actions))
+        ]
         for action_name, click in click_sequence:
             if time.monotonic() >= deadline:
                 break

@@ -6,7 +6,11 @@ from pathlib import Path
 
 import numpy as np
 
-from .cli_utils import add_capture_region_args, capture_region_from_args
+from .cli_utils import (
+    add_capture_region_args,
+    capture_region_from_args,
+    parse_args_allowing_launch_flags,
+)
 from .env import RESET_ATTACH, RESET_RELAUNCH, GettingOverItEnv
 
 
@@ -73,8 +77,14 @@ def main() -> None:
     parser.add_argument(
         "--min-reward-std",
         type=float,
-        default=1e-8,
+        default=1e-4,
         help="Minimum reward standard deviation required before training.",
+    )
+    parser.add_argument(
+        "--min-progress-valid-ratio",
+        type=float,
+        default=0.8,
+        help="Minimum fraction of preflight steps with valid progress.",
     )
     parser.add_argument(
         "--send-actions",
@@ -96,7 +106,7 @@ def main() -> None:
     parser.add_argument("--max-dx", type=int, default=200, help="Maximum mouse dx per env frame.")
     parser.add_argument("--max-dy", type=int, default=200, help="Maximum mouse dy per env frame.")
     add_capture_region_args(parser)
-    args = parser.parse_args()
+    args = parse_args_allowing_launch_flags(parser)
 
     if args.reset_backend == RESET_ATTACH and not args.allow_attach_reset:
         raise SystemExit(
@@ -115,6 +125,7 @@ def main() -> None:
 
     try:
         from stable_baselines3 import PPO, SAC
+        from stable_baselines3.common.monitor import Monitor
     except ModuleNotFoundError as exc:
         raise SystemExit("Install RL extras first: uv sync --extra rl") from exc
 
@@ -144,8 +155,27 @@ def main() -> None:
         max_dx=args.max_dx,
         max_dy=args.max_dy,
     )
+    monitor_path = Path(args.tensorboard_log) / "monitor.csv"
+    monitor_path.parent.mkdir(parents=True, exist_ok=True)
+    env = Monitor(
+        env,
+        filename=str(monitor_path),
+        info_keywords=(
+            "progress_y",
+            "progress_valid",
+            "progress_source",
+            "reward_reason",
+            "process_lost",
+            "reset_mode",
+        ),
+    )
     if args.preflight_steps > 0:
-        _run_reward_preflight(env, args.preflight_steps, args.min_reward_std)
+        _run_reward_preflight(
+            env,
+            args.preflight_steps,
+            args.min_reward_std,
+            args.min_progress_valid_ratio,
+        )
     algo_cls = SAC if args.algo == "sac" else PPO
     model = algo_cls(
         "MultiInputPolicy",
@@ -163,7 +193,12 @@ def main() -> None:
         env.close()
 
 
-def _run_reward_preflight(env: GettingOverItEnv, steps: int, min_reward_std: float) -> None:
+def _run_reward_preflight(
+    env: GettingOverItEnv,
+    steps: int,
+    min_reward_std: float,
+    min_progress_valid_ratio: float,
+) -> None:
     rewards: list[float] = []
     valid_count = 0
     source_counts: dict[str, int] = {}
@@ -194,7 +229,7 @@ def _run_reward_preflight(env: GettingOverItEnv, steps: int, min_reward_std: flo
     if reward_std <= min_reward_std:
         raise SystemExit("Refusing to train: reward_std is too low.")
 
-    if valid_ratio < 0.8:
+    if valid_ratio < min_progress_valid_ratio:
         raise SystemExit("Refusing to train: progress signal is invalid too often.")
 
     if source_counts.get("invalid", 0) > len(rewards) * 0.2:

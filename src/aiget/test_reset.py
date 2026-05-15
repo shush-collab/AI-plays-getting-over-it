@@ -6,7 +6,11 @@ import json
 import time
 from pathlib import Path
 
-from .cli_utils import add_capture_region_args, capture_region_from_args
+from .cli_utils import (
+    add_capture_region_args,
+    capture_region_from_args,
+    parse_args_allowing_launch_flags,
+)
 from .env import IMAGE_OBS_KEY, RESET_RELAUNCH, GettingOverItEnv
 from .png_utils import write_gray_png
 
@@ -31,6 +35,12 @@ def main() -> None:
         description="Verify relaunch/save-restore reset for Getting Over It."
     )
     parser.add_argument("--resets", type=int, default=5, help="Number of reset attempts.")
+    parser.add_argument(
+        "--reset-backend",
+        choices=(RESET_RELAUNCH,),
+        default=RESET_RELAUNCH,
+        help="Accepted for parity with training/debug commands; test_reset always relaunches.",
+    )
     parser.add_argument(
         "--launch-command",
         nargs="+",
@@ -85,7 +95,7 @@ def main() -> None:
         help="Do not terminate any existing game process before relaunch.",
     )
     add_capture_region_args(parser)
-    args = parser.parse_args()
+    args = parse_args_allowing_launch_flags(parser)
 
     capture_region = capture_region_from_args(args)
     if capture_region is None:

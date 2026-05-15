@@ -714,7 +714,7 @@ class GettingOverItEnv(gym.Env):
             timeout=self.game_ready_timeout,
             reference_dir=self.startup_reference_dir,
             action_interval=2.0,
-            max_actions=self.startup_attempts or 2,
+            max_actions=self.startup_attempts or 6,
             title_click=self.startup_title_click,
             confirm_click=self.startup_confirm_click,
         )
@@ -1044,6 +1044,7 @@ class GettingOverItEnv(gym.Env):
             "progress_source": reward_debug.get(
                 "progress_source", reward_debug.get("initial_progress_source", "invalid")
             ),
+            "reward_reason": reward_debug.get("reward_reason", "missing"),
             "reward_debug": reward_debug,
         }
 

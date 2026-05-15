@@ -15,7 +15,11 @@ import tty
 from datetime import datetime
 from pathlib import Path
 
-from .cli_utils import add_capture_region_args, capture_region_from_args
+from .cli_utils import (
+    add_capture_region_args,
+    capture_region_from_args,
+    parse_args_allowing_launch_flags,
+)
 from .frame_capture import CaptureRegion, FrameCapture
 from .memory_probe import auto_pid
 from .png_utils import write_gray_png
@@ -67,7 +71,7 @@ def main() -> None:
     parser.add_argument("--no-kill-existing", action="store_true")
     parser.add_argument("--no-launch", action="store_true", help="Attach to already-running game.")
     add_capture_region_args(parser)
-    args = parser.parse_args()
+    args = parse_args_allowing_launch_flags(parser)
 
     run_dir = Path(args.output_dir) / datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)

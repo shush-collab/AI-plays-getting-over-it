@@ -4,19 +4,41 @@ from __future__ import annotations
 import argparse
 import csv
 import time
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
 
-from .cli_utils import add_capture_region_args, capture_region_from_args
-from .env import IMAGE_OBS_KEY, STATE_OBS_KEY, GettingOverItEnv
+from .cli_utils import (
+    add_capture_region_args,
+    capture_region_from_args,
+    parse_args_allowing_launch_flags,
+)
+from .env import IMAGE_OBS_KEY, RESET_ATTACH, RESET_RELAUNCH, STATE_OBS_KEY, GettingOverItEnv
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--pid", type=int, default=None)
     parser.add_argument("--seconds", type=float, default=120.0)
     parser.add_argument("--send-actions", action="store_true")
     parser.add_argument("--csv", default="runs/reward_signal.csv")
+    parser.add_argument(
+        "--reset-backend",
+        choices=(RESET_ATTACH, RESET_RELAUNCH),
+        default=RESET_ATTACH,
+    )
+    parser.add_argument("--launch-command", nargs="+", default=None)
+    parser.add_argument("--clean-save-path", type=str, default=None)
+    parser.add_argument("--active-save-path", type=str, default=None)
+    parser.add_argument("--game-ready-timeout", type=float, default=45.0)
+    parser.add_argument("--startup-mode", choices=("none", "auto"), default="none")
+    parser.add_argument("--title-click", nargs=2, type=int, default=(1275, 305))
+    parser.add_argument("--confirm-click", nargs=2, type=int, default=(1275, 305))
+    parser.add_argument("--window-left", type=int, default=None)
+    parser.add_argument("--window-top", type=int, default=None)
+    parser.add_argument("--window-width", type=int, default=None)
+    parser.add_argument("--window-height", type=int, default=None)
     parser.add_argument("--min-valid-ratio", type=float, default=0.8)
     parser.add_argument("--min-reward-std", type=float, default=1e-4)
     parser.add_argument("--memory-window", type=lambda value: int(value, 0), default=0x400)
@@ -24,12 +46,31 @@ def main() -> None:
     parser.add_argument("--max-dx", type=int, default=200)
     parser.add_argument("--max-dy", type=int, default=200)
     add_capture_region_args(parser)
-    args = parser.parse_args()
+    args = parse_args_allowing_launch_flags(parser)
+
+    if args.reset_backend == RESET_RELAUNCH:
+        if args.launch_command is None:
+            raise SystemExit("Relaunch reward debug requires --launch-command")
+        if args.clean_save_path is None or args.active_save_path is None:
+            raise SystemExit("Relaunch reward debug requires save paths")
 
     env = GettingOverItEnv(
+        pid=args.pid,
         capture_region=capture_region_from_args(args),
         strict_image=True,
         enable_uinput=args.send_actions,
+        reset_backend=args.reset_backend,
+        launch_command=args.launch_command,
+        clean_save_path=args.clean_save_path,
+        active_save_path=args.active_save_path,
+        game_ready_timeout=args.game_ready_timeout,
+        startup_mode="auto" if args.startup_mode == "auto" else "legacy",
+        startup_title_click=tuple(args.title_click),
+        startup_confirm_click=tuple(args.confirm_click),
+        window_left=args.window_left,
+        window_top=args.window_top,
+        window_width=args.window_width,
+        window_height=args.window_height,
         discover_rich_layout=True,
         window=args.memory_window,
         layout_discovery_timeout=args.layout_discovery_timeout,
@@ -82,10 +123,16 @@ def main() -> None:
         rewards = np.asarray([float(r["reward"]) for r in rows], dtype=np.float32)
         valid_ratio = sum(bool(r["progress_valid"]) for r in rows) / max(1, len(rows))
         reward_std = float(rewards.std()) if len(rewards) else 0.0
+        source_counts = Counter(str(row.get("progress_source", "missing")) for row in rows)
+        reason_counts = Counter(str(row.get("reward_reason", "missing")) for row in rows)
 
         print(f"rows: {len(rows)}")
         print(f"reward_std: {reward_std:.9f}")
         print(f"progress_valid_ratio: {valid_ratio:.3f}")
+        print(f"progress_sources: {dict(source_counts)}")
+        print(f"reward_reasons: {dict(reason_counts)}")
+        print(f"reset_mode: {info.get('reset_mode')}")
+        print(f"process_lost: {info.get('process_lost')}")
         print(f"csv: {args.csv}")
 
         if valid_ratio < args.min_valid_ratio:

@@ -4,12 +4,17 @@ from __future__ import annotations
 import argparse
 import csv
 import time
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
 
-from .cli_utils import add_capture_region_args, capture_region_from_args
-from .env import IMAGE_OBS_KEY, STATE_OBS_KEY, GettingOverItEnv
+from .cli_utils import (
+    add_capture_region_args,
+    capture_region_from_args,
+    parse_args_allowing_launch_flags,
+)
+from .env import IMAGE_OBS_KEY, RESET_ATTACH, RESET_RELAUNCH, STATE_OBS_KEY, GettingOverItEnv
 
 
 def main() -> None:
@@ -37,6 +42,23 @@ def main() -> None:
         help="Send random actions through uinput.",
     )
     parser.add_argument(
+        "--reset-backend",
+        choices=(RESET_ATTACH, RESET_RELAUNCH),
+        default=RESET_ATTACH,
+        help="Game reset backend.",
+    )
+    parser.add_argument("--launch-command", nargs="+", default=None)
+    parser.add_argument("--clean-save-path", type=str, default=None)
+    parser.add_argument("--active-save-path", type=str, default=None)
+    parser.add_argument("--game-ready-timeout", type=float, default=45.0)
+    parser.add_argument("--startup-mode", choices=("none", "auto"), default="none")
+    parser.add_argument("--title-click", nargs=2, type=int, default=(1275, 305))
+    parser.add_argument("--confirm-click", nargs=2, type=int, default=(1275, 305))
+    parser.add_argument("--window-left", type=int, default=None)
+    parser.add_argument("--window-top", type=int, default=None)
+    parser.add_argument("--window-width", type=int, default=None)
+    parser.add_argument("--window-height", type=int, default=None)
+    parser.add_argument(
         "--strict-image",
         action="store_true",
         help="Fail if image capture is blank, stale, or unavailable.",
@@ -58,8 +80,8 @@ def main() -> None:
         default=5.0,
         help="Seconds allowed for rich layout discovery when enabled.",
     )
-    parser.add_argument("--max-dx", type=int, default=40, help="Maximum mouse dx per env frame.")
-    parser.add_argument("--max-dy", type=int, default=40, help="Maximum mouse dy per env frame.")
+    parser.add_argument("--max-dx", type=int, default=200, help="Maximum mouse dx per env frame.")
+    parser.add_argument("--max-dy", type=int, default=200, help="Maximum mouse dy per env frame.")
     parser.add_argument(
         "--csv",
         type=str,
@@ -67,7 +89,13 @@ def main() -> None:
         help="CSV output path.",
     )
     add_capture_region_args(parser)
-    args = parser.parse_args()
+    args = parse_args_allowing_launch_flags(parser)
+
+    if args.reset_backend == RESET_RELAUNCH:
+        if args.launch_command is None:
+            raise SystemExit("Relaunch rollout requires --launch-command")
+        if args.clean_save_path is None or args.active_save_path is None:
+            raise SystemExit("Relaunch rollout requires save paths")
 
     env = GettingOverItEnv(
         pid=args.pid,
@@ -77,6 +105,18 @@ def main() -> None:
         strict_image=args.strict_image,
         capture_region=capture_region_from_args(args),
         enable_uinput=args.send_actions,
+        reset_backend=args.reset_backend,
+        launch_command=args.launch_command,
+        clean_save_path=args.clean_save_path,
+        active_save_path=args.active_save_path,
+        game_ready_timeout=args.game_ready_timeout,
+        startup_mode="auto" if args.startup_mode == "auto" else "legacy",
+        startup_title_click=tuple(args.title_click),
+        startup_confirm_click=tuple(args.confirm_click),
+        window_left=args.window_left,
+        window_top=args.window_top,
+        window_width=args.window_width,
+        window_height=args.window_height,
         discover_rich_layout=args.discover_rich_layout,
         window=args.memory_window,
         layout_discovery_timeout=args.layout_discovery_timeout,
@@ -144,7 +184,15 @@ def main() -> None:
         print(f"fps: {steps / elapsed:.3f}")
         print(f"reward_total: {reward_total:.6f}")
         reward_std = _reward_std(rows)
+        valid_ratio = _progress_valid_ratio(rows)
+        source_counts = Counter(str(row.get("progress_source", "missing")) for row in rows)
+        reason_counts = Counter(str(row.get("reward_reason", "missing")) for row in rows)
         print(f"reward_std: {reward_std:.9f}")
+        print(f"progress_valid_ratio: {valid_ratio:.3f}")
+        print(f"progress_sources: {dict(source_counts)}")
+        print(f"reward_reasons: {dict(reason_counts)}")
+        print(f"reset_mode: {info.get('reset_mode')}")
+        print(f"process_lost: {info.get('process_lost')}")
         print(f"body_y: {float(obs[STATE_OBS_KEY][5]):.6f}")
         print(f"best_y: {float(obs[STATE_OBS_KEY][13]):.6f}")
         print(f"terminated: {terminated}")
@@ -169,6 +217,12 @@ def _reward_std(rows: list[dict[str, object]]) -> float:
         return 0.0
     rewards = np.asarray([float(row["reward"]) for row in rows], dtype=np.float32)
     return float(rewards.std())
+
+
+def _progress_valid_ratio(rows: list[dict[str, object]]) -> float:
+    if not rows:
+        return 0.0
+    return sum(bool(row.get("progress_valid", False)) for row in rows) / len(rows)
 
 
 if __name__ == "__main__":

@@ -271,6 +271,7 @@ Every `env.step()` exposes reward diagnostics in `info`:
 progress_y
 progress_valid
 progress_source
+reward_reason
 reward_debug
 ```
 
@@ -299,7 +300,7 @@ Run an observation benchmark:
 python -m aiget.benchmark_observation --seconds 10
 ```
 
-Run a random-action smoke rollout:
+Run an attach-mode random-action smoke rollout:
 
 ```bash
 python -m aiget.random_rollout \
@@ -312,7 +313,7 @@ python -m aiget.random_rollout \
   --csv runs/random_rollout.csv
 ```
 
-Debug reward signal quality:
+Debug attach-mode reward signal quality:
 
 ```bash
 python -m aiget.debug_reward_signal \
@@ -345,6 +346,8 @@ Example:
 ```bash
 python -m aiget.test_reset \
   --resets 5 \
+  --reset-backend relaunch \
+  --launch-command steam -applaunch 240720 -- -screen-fullscreen 0 -screen-width 1920 -screen-height 1080 \
   --clean-save-path "$HOME/goi_reset_saves/start_clean" \
   --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
   --startup-mode auto \
@@ -361,6 +364,78 @@ window/capture: 320,178,1920,1080
 title click:    1275,305
 confirm click:  1275,305
 ```
+
+Relaunch reward proof uses the same reset path as training:
+
+```bash
+python -m aiget.debug_reward_signal \
+  --seconds 300 \
+  --send-actions \
+  --reset-backend relaunch \
+  --launch-command steam -applaunch 240720 -- -screen-fullscreen 0 -screen-width 1920 -screen-height 1080 \
+  --clean-save-path "$HOME/goi_reset_saves/start_clean" \
+  --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
+  --startup-mode auto \
+  --title-click 1275 305 \
+  --confirm-click 1275 305 \
+  --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
+  --capture-left 320 --capture-top 178 --capture-width 1920 --capture-height 1080 \
+  --csv runs/reward_signal_relaunch_300s.csv
+```
+
+Relaunch random rollout proof:
+
+```bash
+python -m aiget.random_rollout \
+  --seconds 300 \
+  --send-actions \
+  --reset-backend relaunch \
+  --launch-command steam -applaunch 240720 -- -screen-fullscreen 0 -screen-width 1920 -screen-height 1080 \
+  --clean-save-path "$HOME/goi_reset_saves/start_clean" \
+  --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
+  --startup-mode auto \
+  --title-click 1275 305 \
+  --confirm-click 1275 305 \
+  --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
+  --capture-left 320 --capture-top 178 --capture-width 1920 --capture-height 1080 \
+  --strict-image \
+  --discover-rich-layout \
+  --csv runs/random_rollout_relaunch_300s.csv
+```
+
+Relaunch reward and rollout proof should show:
+
+- `reset_mode = relaunch_save_restore`
+- `progress_valid_ratio >= 0.8`
+- `reward_std > 0.0001`
+- progress source mostly `memory_body` or `memory_progress`
+- reward reason mostly `height_progress`
+- `process_lost = False`
+
+Training refuses attach-only reset by default. Real training should use
+`--reset-backend relaunch`, a known clean save, an active save path, a launch
+command, an explicit capture region, and reward/progress preflight guards:
+
+```bash
+python -m aiget.train_sac \
+  --algo sac \
+  --steps 10000 \
+  --send-actions \
+  --reset-backend relaunch \
+  --launch-command steam -applaunch 240720 -- -screen-fullscreen 0 -screen-width 1920 -screen-height 1080 \
+  --clean-save-path "$HOME/goi_reset_saves/start_clean" \
+  --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
+  --startup-mode auto \
+  --title-click 1275 305 \
+  --confirm-click 1275 305 \
+  --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
+  --capture-left 320 --capture-top 178 --capture-width 1920 --capture-height 1080 \
+  --preflight-steps 300 \
+  --min-reward-std 0.0001 \
+  --min-progress-valid-ratio 0.8
+```
+
+Training writes SB3 Monitor episode diagnostics to `runs/monitor.csv`.
 
 ---
 
