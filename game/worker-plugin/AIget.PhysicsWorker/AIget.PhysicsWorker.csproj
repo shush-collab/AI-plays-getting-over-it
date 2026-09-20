@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- BepInEx' bundled CoreCLR is .NET 6; netstandard avoids SDK-specific runtime metadata. -->
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>AIget.PhysicsWorker</AssemblyName>
+    <RootNamespace>AIget.PhysicsWorker</RootNamespace>
+    <GameRoot Condition="'$(GameRoot)' == ''">$(MSBuildProjectDirectory)/../../../runs/training-game/getting-over-it-physics-worker</GameRoot>
+  </PropertyGroup>
+
+  <!-- These assemblies are supplied by the installed BepInEx IL2CPP runtime. -->
+  <ItemGroup>
+    <Reference Include="BepInEx.Core"><HintPath>$(GameRoot)/BepInEx/core/BepInEx.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="BepInEx.Unity.IL2CPP"><HintPath>$(GameRoot)/BepInEx/core/BepInEx.Unity.IL2CPP.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Runtime"><HintPath>$(GameRoot)/BepInEx/core/Il2CppInterop.Runtime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2Cppmscorlib"><HintPath>$(GameRoot)/BepInEx/interop/Il2Cppmscorlib.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(GameRoot)/BepInEx/interop/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.AudioModule"><HintPath>$(GameRoot)/BepInEx/interop/UnityEngine.AudioModule.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>
