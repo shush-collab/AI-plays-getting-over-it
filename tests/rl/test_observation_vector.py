@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 try:
@@ -14,7 +14,7 @@ except ModuleNotFoundError:
 @unittest.skipIf(np is None, "numpy is not installed")
 class ObservationVectorTests(unittest.TestCase):
     def test_build_observation_vector_fills_values_and_masks(self) -> None:
-        from aiget.observation_vector import OBS_DIM, build_observation_vector
+        from aiget.rl.observation_vector import OBS_DIM, build_observation_vector
 
         out = np.zeros(OBS_DIM, dtype=np.float32)
         rich_values = np.arange(11, dtype=np.float32)
@@ -37,7 +37,7 @@ class ObservationVectorTests(unittest.TestCase):
         self.assertTrue(np.all(obs[21:] == 1.0))
 
     def test_invalid_rich_fields_are_zeroed(self) -> None:
-        from aiget.observation_vector import OBS_DIM, build_observation_vector
+        from aiget.rl.observation_vector import OBS_DIM, build_observation_vector
 
         out = np.zeros(OBS_DIM, dtype=np.float32)
         rich_values = np.ones(11, dtype=np.float32) * 5.0

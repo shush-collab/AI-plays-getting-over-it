@@ -1,16 +1,11 @@
 import math
 import queue
 import struct
-import sys
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from aiget.live_layout import ResolvedLiveLayout
-from aiget.observation_state import (
+from aiget.game.probing.live_layout import ResolvedLiveLayout
+from aiget.game.probing.observation_state import (
     AngleSample,
     PositionSample,
     ProgressTracker,
@@ -18,18 +13,18 @@ from aiget.observation_state import (
     RichRawSample,
     RichStateSnapshot,
     SlowLaneAccumulator,
+    _resolve_or_load_live_layout,
     build_rich_state_snapshot_from_raw,
     consume_latest_rich_state,
     decode_hammer_contact_state,
+    empty_live_layout,
     estimate_angular_velocity,
     estimate_velocity,
     format_payload,
     freeze_raw_rich_lane,
-    empty_live_layout,
     publish_latest_rich_state,
     read_rich_raw_sample,
     run_slow_lane_worker,
-    _resolve_or_load_live_layout,
 )
 
 
@@ -446,9 +441,9 @@ class ObservationStateTests(unittest.TestCase):
         rich_state = build_rich_state_snapshot_from_raw(rich_sample, accumulator)
 
         with (
-            patch("aiget.observation_state.MemReader", return_value=fake_reader) as mem_reader_cls,
-            patch("aiget.observation_state.read_rich_raw_sample", return_value=rich_sample) as read_raw,
-            patch("aiget.observation_state.build_rich_state_snapshot_from_raw", return_value=rich_state) as build_snapshot,
+            patch("aiget.game.probing.observation_state.MemReader", return_value=fake_reader) as mem_reader_cls,
+            patch("aiget.game.probing.observation_state.read_rich_raw_sample", return_value=rich_sample) as read_raw,
+            patch("aiget.game.probing.observation_state.build_rich_state_snapshot_from_raw", return_value=rich_state) as build_snapshot,
         ):
             run_slow_lane_worker(lane, updates, stop_event, accumulator)
 
@@ -487,8 +482,8 @@ class ObservationStateTests(unittest.TestCase):
         )
 
         with (
-            patch("aiget.observation_state.load_live_layout", return_value=cached_layout),
-            patch("aiget.observation_state.resolve_live_layout") as resolve_layout,
+            patch("aiget.game.probing.observation_state.load_live_layout", return_value=cached_layout),
+            patch("aiget.game.probing.observation_state.resolve_live_layout") as resolve_layout,
         ):
             layout, source = _resolve_or_load_live_layout(1234, args, fast_cursor_addr=0xABC)
 
@@ -512,7 +507,7 @@ class ObservationStateTests(unittest.TestCase):
             },
         )()
 
-        with patch("aiget.observation_state.resolve_live_layout", side_effect=RuntimeError("timeout")):
+        with patch("aiget.game.probing.observation_state.resolve_live_layout", side_effect=RuntimeError("timeout")):
             layout, source = _resolve_or_load_live_layout(1234, args, fast_cursor_addr=0xABC)
 
         self.assertEqual(source, "Fallback")

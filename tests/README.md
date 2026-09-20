@@ -1,9 +1,11 @@
 # Tests
 
-This directory contains unit tests for `src/aiget`.
+This directory mirrors the canonical `src/aiget` domains: `game`, `rl`,
+`shared`, and `compat`.
 
 Current coverage is focused on:
 
+- grouped-package and compatibility-import checks
 - schema formatting
 - CLI wrapper help/output
 - fast cursor lane helpers

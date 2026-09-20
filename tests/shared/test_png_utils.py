@@ -5,10 +5,15 @@ from pathlib import Path
 
 import numpy as np
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from aiget.png_utils import gray_to_rgb, read_png, write_gray_png, write_rgb_png  # noqa: E402
+from aiget.shared.png_utils import (  # noqa: E402
+    gray_to_rgb,
+    read_png,
+    write_gray_png,
+    write_rgb_png,
+)
 
 
 class PngUtilsTests(unittest.TestCase):

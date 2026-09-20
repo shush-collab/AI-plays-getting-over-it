@@ -1,7 +1,7 @@
 # Observation Schema
 
 The v1 training observation is a Gymnasium Dict. The vector part is defined by
-`src/aiget/observation_schema.py` and filled by `src/aiget/observation_vector.py`.
+`src/aiget/rl/observation_schema.py` and filled by `src/aiget/rl/observation_vector.py`.
 
 Default settings:
 - schema version: `v1`
@@ -71,7 +71,7 @@ python goi_observation_schema.py --format markdown
 Use the Gymnasium environment:
 
 ```python
-from aiget.env import GettingOverItEnv
+from aiget.rl.env import GettingOverItEnv
 
 env = GettingOverItEnv(dt=1.0 / 30.0)
 obs, info = env.reset()

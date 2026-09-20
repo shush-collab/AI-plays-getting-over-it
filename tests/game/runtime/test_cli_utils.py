@@ -1,7 +1,7 @@
 import argparse
 import unittest
 
-from aiget.cli_utils import parse_args_allowing_launch_flags
+from aiget.game.runtime.cli_utils import parse_args_allowing_launch_flags
 
 
 class CliUtilsTests(unittest.TestCase):

@@ -4,10 +4,10 @@ from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from aiget.env import IMAGE_SHAPE, RESET_RELAUNCH, GettingOverItEnv  # noqa: E402
+from aiget.rl.env import IMAGE_SHAPE, RESET_RELAUNCH, GettingOverItEnv  # noqa: E402
 
 
 class EnvSafetyTests(unittest.TestCase):
@@ -34,7 +34,7 @@ class EnvSafetyTests(unittest.TestCase):
         env._mem_fd = 123
         env._fast_addr = 0x456
         try:
-            with patch("aiget.env.os.pread", return_value=b"\x00"):
+            with patch("aiget.rl.env.os.pread", return_value=b"\x00"):
                 with self.assertRaisesRegex(ProcessLookupError, "short cursor read"):
                     env.read_observation_vector()
         finally:
@@ -57,7 +57,7 @@ class EnvSafetyTests(unittest.TestCase):
             return CompletedProcess(command, 0, stdout="", stderr="")
 
         try:
-            with patch("aiget.env.subprocess.run", side_effect=fake_run):
+            with patch("aiget.rl.env.subprocess.run", side_effect=fake_run):
                 env._send_startup_action()
         finally:
             env.close()

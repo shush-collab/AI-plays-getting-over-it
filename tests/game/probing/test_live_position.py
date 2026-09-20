@@ -1,11 +1,11 @@
-import sys
 import unittest
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from aiget.live_position import CandidatePath, FastCursorLane, fallback_candidate_from_truth, read_fast_cursor_sample
+from aiget.game.probing.live_position import (
+    CandidatePath,
+    FastCursorLane,
+    fallback_candidate_from_truth,
+    read_fast_cursor_sample,
+)
 
 
 class _FakeReader:

@@ -1,21 +1,16 @@
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from aiget.memory_probe import GAME_BINARY, candidate_pids_from_pgrep_output
-from aiget.ptrace_il2cpp import (
+from aiget.game.probing.live_layout import ResolvedLiveLayout
+from aiget.game.probing.memory_probe import GAME_BINARY, candidate_pids_from_pgrep_output
+from aiget.game.probing.ptrace_il2cpp import (
     ValidationReport,
     choose_int3_trap_offset,
     load_export_offsets,
     resolve_live_layout,
     validate_live_layout,
 )
-from aiget.live_layout import ResolvedLiveLayout
 
 
 class _FakeReader:
@@ -50,7 +45,7 @@ class _FakeReader:
 
 class PtraceIcallTests(unittest.TestCase):
     def tearDown(self) -> None:
-        import aiget.ptrace_il2cpp as ptrace_module
+        import aiget.game.probing.ptrace_il2cpp as ptrace_module
 
         ptrace_module._EXPORT_OFFSETS_CACHE = None
 
@@ -98,7 +93,7 @@ class PtraceIcallTests(unittest.TestCase):
         )
 
         with patch(
-            "aiget.ptrace_il2cpp.subprocess.run",
+            "aiget.game.probing.ptrace_il2cpp.subprocess.run",
             return_value=SimpleNamespace(stdout=nm_stdout),
         ) as run:
             first = load_export_offsets()
@@ -154,10 +149,10 @@ class PtraceIcallTests(unittest.TestCase):
         fake_runtime = SimpleNamespace(get_position_via_icall=lambda rb_obj: (9.0, 10.0))
 
         with (
-            patch("aiget.ptrace_il2cpp._attach_runtime", return_value=(SimpleNamespace(close=lambda: None), fake_runtime)),
-            patch("aiget.ptrace_il2cpp._resolve_playercontrol_refs", return_value=SimpleNamespace(fake_cursor_rb_obj=0xDEAD)),
-            patch("aiget.ptrace_il2cpp._sample_observation_snapshot", return_value=authoritative_snapshot),
-            patch("aiget.ptrace_il2cpp.MemReader", return_value=fake_reader),
+            patch("aiget.game.probing.ptrace_il2cpp._attach_runtime", return_value=(SimpleNamespace(close=lambda: None), fake_runtime)),
+            patch("aiget.game.probing.ptrace_il2cpp._resolve_playercontrol_refs", return_value=SimpleNamespace(fake_cursor_rb_obj=0xDEAD)),
+            patch("aiget.game.probing.ptrace_il2cpp._sample_observation_snapshot", return_value=authoritative_snapshot),
+            patch("aiget.game.probing.ptrace_il2cpp.MemReader", return_value=fake_reader),
         ):
             report = validate_live_layout(15081, layout)
 
@@ -185,11 +180,11 @@ class PtraceIcallTests(unittest.TestCase):
         fake_process = SimpleNamespace(close=lambda: None)
 
         with (
-            patch("aiget.ptrace_il2cpp._attach_runtime", return_value=(fake_process, object())),
-            patch("aiget.ptrace_il2cpp._resolve_playercontrol_refs", return_value=refs),
-            patch("aiget.ptrace_il2cpp._sample_observation_snapshot", return_value=snapshot),
-            patch("aiget.ptrace_il2cpp._discover_repeated_vec2_addr") as discover_vec2,
-            patch("aiget.live_position.freeze_fast_cursor_lane") as freeze_fast_lane,
+            patch("aiget.game.probing.ptrace_il2cpp._attach_runtime", return_value=(fake_process, object())),
+            patch("aiget.game.probing.ptrace_il2cpp._resolve_playercontrol_refs", return_value=refs),
+            patch("aiget.game.probing.ptrace_il2cpp._sample_observation_snapshot", return_value=snapshot),
+            patch("aiget.game.probing.ptrace_il2cpp._discover_repeated_vec2_addr") as discover_vec2,
+            patch("aiget.game.probing.live_position.freeze_fast_cursor_lane") as freeze_fast_lane,
         ):
             layout = resolve_live_layout(
                 15081,

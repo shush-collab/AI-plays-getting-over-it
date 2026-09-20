@@ -11,7 +11,7 @@
 
 - The validated coordinate is the live `Rigidbody2D.position` of `PlayerControl.fakeCursorRB`.
 - This is currently the best confirmed movement signal for the player.
-- The fast observation lane in `src/aiget/live_position.py` is built directly on this signal.
+- The fast observation lane in `src/aiget/game/probing/live_position.py` is built directly on this signal.
 
 ## Memory Path
 

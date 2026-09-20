@@ -1,12 +1,13 @@
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from aiget.live_layout import ResolvedLiveLayout, default_live_layout_cache_path, load_live_layout, save_live_layout
+from aiget.game.probing.live_layout import (
+    ResolvedLiveLayout,
+    default_live_layout_cache_path,
+    load_live_layout,
+    save_live_layout,
+)
 
 
 class LiveLayoutTests(unittest.TestCase):

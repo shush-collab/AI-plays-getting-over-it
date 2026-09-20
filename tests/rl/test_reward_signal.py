@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-from aiget.progress_signal import ProgressEstimator, ProgressSource
-from aiget.reward import HeightReward
+from aiget.rl.progress_signal import ProgressEstimator, ProgressSource
+from aiget.rl.reward import HeightReward
 
 
 class RewardSignalTests(unittest.TestCase):
