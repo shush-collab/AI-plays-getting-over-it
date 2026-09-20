@@ -9,10 +9,12 @@ rollout collection and training.
 
 ```text
 AIget/
-├── docs/
-├── src/
-│   └── aiget/
-├── tests/
+├── docs/{game,rl}/
+├── game/worker-plugin/
+├── simulation/
+├── src/aiget/{game,rl,shared}/
+├── scripts/game/
+├── tests/{game,rl,shared,compat}/
 ├── goi_live_position.py
 ├── goi_memory_probe.py
 ├── goi_observation_schema.py
@@ -25,15 +27,18 @@ AIget/
 
 ## What Goes Where
 
-- `src/aiget/` contains the real implementation.
+- `src/aiget/game/` contains game probes, runtime control, worker tooling, and game utilities.
+- `src/aiget/rl/` contains the environment, observations, rewards, and RL-facing commands.
+- `src/aiget/shared/` contains dependency-free helpers shared across domains.
+- `simulation/` contains the standalone C/Box2D/raylib engine.
+- `game/worker-plugin/` contains the BepInEx worker plugin.
 - Root-level `goi_*.py` files are thin compatibility launchers.
-- `docs/` contains design notes, reverse-engineering details, and runtime assumptions.
-- `tests/` contains automated checks that should not require a live game process.
-- `docs/observation-roadmap.md` tracks the current observation-architecture work.
+- `docs/game/` and `docs/rl/` contain domain-specific design notes.
+- `tests/` mirrors source domains and remains independent of a live game process.
 
 ## Working Agreement
 
-- Keep implementation code inside `src/aiget/`.
+- Put implementation code in the smallest matching canonical domain under `src/aiget/`.
 - Keep root-level launcher scripts minimal.
 - Prefer small, single-purpose functions.
 - Add tests for non-trivial changes when practical.
@@ -77,7 +82,7 @@ Good contribution notes include:
 
 When adding a new module:
 
-- Put reusable code under `src/aiget/`.
+- Put reusable code in `src/aiget/shared/` only when it has no game- or RL-specific dependency.
 - Name the file after its responsibility.
 - Add a short module docstring if needed.
 - Keep CLI parsing in `main()`.
@@ -85,7 +90,7 @@ When adding a new module:
 
 Examples:
 
-- Good: `src/aiget/terrain_sampling.py`
+- Good: `src/aiget/game/probing/terrain_sampling.py`
 - Avoid: `src/aiget/new_code.py`
 
 ## Adding New Functions
@@ -119,15 +124,14 @@ Every user-facing CLI module should:
 Before submitting a change, run:
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -m pytest -q
 python3 -m compileall src *.py
 ```
 
 If you have dev tools installed, also run:
 
 ```bash
-pytest
-ruff check .
+python3 -m ruff check .
 ```
 
 Test expectations:

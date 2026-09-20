@@ -70,6 +70,11 @@ This project builds an environment around an existing native Linux game by combi
 - menu/startup automation
 - reward validation
 
+On Wayland sessions, reliable menu automation may require `ydotool`. The reset
+tools default to `--startup-input-backend auto`, which prefers `ydotool` on
+Wayland when it is installed and otherwise falls back to `xdotool` for Xwayland
+game windows.
+
 The main challenge is not only “train an agent.”  
 The first challenge is building a stable environment where an agent can safely learn.
 
@@ -121,7 +126,7 @@ Working:
 - raw memory fast cursor lane
 - partial rich-state memory lane
 - reward/progress diagnostics
-- deterministic relaunch/save-restore reset on the current setup
+- relaunch/save-restore reset tooling with stage-level diagnostics
 - random rollout smoke testing
 - reward signal preflight
 - environment validation with SB3 `check_env`
@@ -132,6 +137,7 @@ Still in progress:
 - replacing external rich reads with a cleaner in-game shared-memory observation blob
 - improving reward shaping beyond simple height progress
 - making reset/menu automation portable across more screen layouts
+- proving reset end-to-end on Wayland once a working input backend is available
 - separating long-running agent training into its own project/layer
 
 ---
@@ -141,36 +147,25 @@ Still in progress:
 ```text
 .
 ├── docs/
-│   ├── observation-schema.md
-│   ├── observation-roadmap.md
-│   └── player-movement.md
-│
+│   ├── game/                    # worker and probing notes
+│   └── rl/                      # observation and rollout notes
+├── game/
+│   └── worker-plugin/           # BepInEx physics-worker plugin
+├── simulation/                  # standalone C/Box2D/raylib engine
 ├── src/aiget/
-│   ├── env.py                    # Gymnasium environment
-│   ├── action_sender.py          # Linux /dev/uinput mouse control
-│   ├── frame_capture.py          # image capture and frame stack
-│   ├── observation_vector.py     # 32-float state vector
-│   ├── observation_state.py      # combined live observation state
-│   ├── observation_schema.py     # observation layout definition
-│   ├── ptrace_il2cpp.py          # Unity/IL2CPP resolver
-│   ├── live_position.py          # fast raw-memory cursor lane
-│   ├── live_layout.py            # reusable raw memory layout
-│   ├── memory_probe.py           # memory inspection helper
-│   ├── progress_signal.py        # progress_y extraction
-│   ├── reward.py                 # reward calculation
-│   ├── debug_reward_signal.py    # live reward preflight
-│   ├── benchmark_observation.py  # observation timing benchmark
-│   ├── random_rollout.py         # random action smoke rollout
-│   ├── check_env.py              # Gymnasium/SB3 env validation
-│   └── test_reset.py             # relaunch/save-restore reset test
-│
-├── tests/
+│   ├── game/                     # probes, runtime control, Unity worker
+│   ├── rl/                       # environment, reward, training tools
+│   └── shared/                   # dependency-free helpers
+├── scripts/game/                 # worker build and reset diagnostics
+├── tests/                        # mirrors game, rl, shared, and compatibility
 ├── pyproject.toml
 ├── uv.lock
 └── README.md
 ```
 
-Root-level `goi_*.py` files are compatibility wrappers around the package in `src/aiget/`.
+The grouped paths are canonical. Existing `aiget.<module>` imports, root-level
+`goi_*.py` launchers, console command names, and root script paths remain
+compatibility entry points.
 
 ---
 
@@ -212,7 +207,7 @@ pip install -e ".[rl]"
 ## Basic Usage
 
 ```python
-from aiget.env import GettingOverItEnv
+from aiget.rl.env import GettingOverItEnv
 
 env = GettingOverItEnv(dt=1.0 / 30.0)
 
@@ -284,26 +279,26 @@ This makes reward bugs visible before long training runs.
 Run repository-level checks:
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -m pytest -q
 python3 -m compileall src *.py
 ```
 
 Validate the Gymnasium environment:
 
 ```bash
-python -m aiget.check_env --allow-attach-reset --steps 100
+python -m aiget.rl.tools.check_env --allow-attach-reset --steps 100
 ```
 
 Run an observation benchmark:
 
 ```bash
-python -m aiget.benchmark_observation --seconds 10
+python -m aiget.rl.tools.benchmark_observation --seconds 10
 ```
 
 Run an attach-mode random-action smoke rollout:
 
 ```bash
-python -m aiget.random_rollout \
+python -m aiget.rl.tools.random_rollout \
   --seconds 60 \
   --discover-rich-layout \
   --capture-left 320 \
@@ -316,7 +311,7 @@ python -m aiget.random_rollout \
 Debug attach-mode reward signal quality:
 
 ```bash
-python -m aiget.debug_reward_signal \
+python -m aiget.rl.tools.debug_reward_signal \
   --seconds 120 \
   --send-actions \
   --capture-left 320 \
@@ -340,17 +335,22 @@ reward reason mostly height_progress
 ## Reset Testing
 
 The environment supports a relaunch/save-restore reset path for the current local setup.
+Startup automation waits for the actual title-menu overlay before sending menu
+input, so the reset trace can distinguish title-background loading from a menu
+that is ready to click.
 
 Example:
 
 ```bash
-python -m aiget.test_reset \
+python -m aiget.rl.tools.test_reset \
   --resets 5 \
   --reset-backend relaunch \
   --launch-command steam -applaunch 240720 -- -screen-fullscreen 0 -screen-width 1920 -screen-height 1080 \
   --clean-save-path "$HOME/goi_reset_saves/start_clean" \
   --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
   --startup-mode auto \
+  --startup-input-backend auto \
+  --startup-probe-timeout 3 \
   --title-click 1275 305 \
   --confirm-click 1275 305 \
   --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
@@ -368,7 +368,7 @@ confirm click:  1275,305
 Relaunch reward proof uses the same reset path as training:
 
 ```bash
-python -m aiget.debug_reward_signal \
+python -m aiget.rl.tools.debug_reward_signal \
   --seconds 300 \
   --send-actions \
   --reset-backend relaunch \
@@ -376,6 +376,8 @@ python -m aiget.debug_reward_signal \
   --clean-save-path "$HOME/goi_reset_saves/start_clean" \
   --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
   --startup-mode auto \
+  --startup-input-backend auto \
+  --startup-probe-timeout 3 \
   --title-click 1275 305 \
   --confirm-click 1275 305 \
   --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
@@ -386,7 +388,7 @@ python -m aiget.debug_reward_signal \
 Relaunch random rollout proof:
 
 ```bash
-python -m aiget.random_rollout \
+python -m aiget.rl.tools.random_rollout \
   --seconds 300 \
   --send-actions \
   --reset-backend relaunch \
@@ -394,6 +396,8 @@ python -m aiget.random_rollout \
   --clean-save-path "$HOME/goi_reset_saves/start_clean" \
   --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
   --startup-mode auto \
+  --startup-input-backend auto \
+  --startup-probe-timeout 3 \
   --title-click 1275 305 \
   --confirm-click 1275 305 \
   --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
@@ -417,7 +421,7 @@ Training refuses attach-only reset by default. Real training should use
 command, an explicit capture region, and reward/progress preflight guards:
 
 ```bash
-python -m aiget.train_sac \
+python -m aiget.rl.tools.train_sac \
   --algo sac \
   --steps 10000 \
   --send-actions \
@@ -426,6 +430,8 @@ python -m aiget.train_sac \
   --clean-save-path "$HOME/goi_reset_saves/start_clean" \
   --active-save-path "$HOME/.config/unity3d/Bennett Foddy/Getting Over It" \
   --startup-mode auto \
+  --startup-input-backend auto \
+  --startup-probe-timeout 3 \
   --title-click 1275 305 \
   --confirm-click 1275 305 \
   --window-left 320 --window-top 178 --window-width 1920 --window-height 1080 \
