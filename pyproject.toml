@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiget"
+version = "0.1.0"
+description = "Linux tooling for controlling and inspecting an owned Getting Over It process."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mss>=10.0",
+    "numpy>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+[project.scripts]
+aiget-live-position = "aiget.game.probing.live_position:main"
+aiget-memory-probe = "aiget.game.probing.memory_probe:main"
+aiget-observation-state = "aiget.game.probing.observation_state:main"
+aiget-ptrace-il2cpp = "aiget.game.probing.ptrace_il2cpp:main"
+aiget-test-reset = "aiget.game.runtime.reset_test:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

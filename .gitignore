@@ -1,0 +1,29 @@
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+.coverage
+htmlcov/
+build/
+dist/
+runs/
+
+# Local environments
+.venv/
+venv/
+env/
+
+# Local tooling and editor state
+.codex
+.codex/
+.cocoindex_code/
+.idea/
+.vscode/
+.DS_Store
+agents.md
+AGENTS.md
